@@ -4,7 +4,7 @@ float[] rgbToHsb(int rgb) {
 
 int rgbWithHsbTweak(int rgb, float hOffset, float sOffset, float bOffset) {
   float[] hsb = rgbToHsb(rgb);
-  return hsbToRgbA((hsb[0] + hOffset + 360) % 360, constrain(hsb[1] + sOffset, 0, 1), constrain(hsb[2] + bOffset, 0, 1));
+  return hsbToRgbA((hsb[0] + hOffset) % 360, constrain(hsb[1] + sOffset, 0, 1), constrain(hsb[2] + bOffset, 0, 1));
 }
 
 float[] rgbToHsb(int r, int g, int b) {
@@ -93,42 +93,4 @@ static float barron(float x, float s, float t) {
   }
 
   return (1 - t) * (x - 1) / (1 - x - s * (t - x) + Float.MIN_NORMAL) + 1;
-}
-
-void normalize(PImage img, float blend) {
-  float rMin = 255;
-  float gMin = 255;
-  float bMin = 255;
-  float rMax = 0;
-  float gMax = 0;
-  float bMax = 0;
-  
-  img.loadPixels();
-  float dampening = 1 - 1000.0 / (img.width * img.height);
-  for(int i = 0; i < img.pixels.length; i++) {
-    color c = img.pixels[i];
-    int r = (c >>> 16) & 0xFF;
-    int g = (c >>> 8) & 0xFF;
-    int b = (c >>> 0) & 0xFF;
-    rMin = lerp(min(rMin, r), rMin, dampening);
-    gMin = lerp(min(gMin, g), gMin, dampening);
-    bMin = lerp(min(bMin, b), bMin, dampening);
-    rMax = lerp(max(rMax, r), rMax, dampening);
-    gMax = lerp(max(gMax, g), gMax, dampening);
-    bMax = lerp(max(bMax, b), bMax, dampening);
-  }
-  float rScale = 255.0f / (max(1, rMax - rMin)); 
-  float gScale = 255.0f / (max(1, gMax - gMin)); 
-  float bScale = 255.0f / (max(1, bMax - bMin));
-  println("rMin: " + rMin + ", rMax: " + rMax + ", rScale: " + rScale);
-  for(int i = 0; i < img.pixels.length; i++) {
-    color c = img.pixels[i];
-    int r = (c >>> 16) & 0xFF;
-    int g = (c >>> 8) & 0xFF;
-    int b = (c >>> 0) & 0xFF;
-    r = (int) constrain(lerp(r, (r - rMin) * rScale, blend), 0, 255);
-    g = (int) constrain(lerp(g, (g - gMin) * gScale, blend), 0, 255);
-    b = (int) constrain(lerp(b, (b - bMin) * bScale, blend), 0, 255);
-    img.pixels[i] = (r << 16) | (g << 8) | (b << 0); //<>//
-  }
 }
