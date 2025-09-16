@@ -263,7 +263,7 @@ void draw() {
       int yOrig = rng.nextInt(0, origImg.height);
       int xPaint = rng.nextInt(0, origImg.width);
       int yPaint = rng.nextInt(0, origImg.height);
-      if (mousePressed && mouseButton == LEFT) {
+      if (mousePressed && mouseButton == LEFT && key != ' ') {
         do {
           int scaledX = (int) (((mouseX - panX) / zoom) * origImg.width / width);
           int scaledY = (int) (((mouseY - panY) / zoom) * origImg.height / height);
