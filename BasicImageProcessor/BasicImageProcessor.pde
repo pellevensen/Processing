@@ -10,7 +10,7 @@ import java.util.BitSet;
 import java.util.Collections;
 import java.util.LinkedList;
 
-final int MIN_DRAW_USECS = 50;
+final int MIN_DRAW_USECS = 20;
 
 PImage baseImg;
 PImage origImg;
@@ -263,6 +263,18 @@ void draw() {
       int yOrig = rng.nextInt(0, origImg.height);
       int xPaint = rng.nextInt(0, origImg.width);
       int yPaint = rng.nextInt(0, origImg.height);
+      if (mousePressed && mouseButton == LEFT) {
+        do {
+          int scaledX = (int) (((mouseX - panX) / zoom) * origImg.width / width);
+          int scaledY = (int) (((mouseY - panY) / zoom) * origImg.height / height);
+
+          xPaint = (int) (scaledX + rng.nextGaussian(0, (origImg.width + origImg.height) / 200));
+          yPaint = (int) (scaledY + rng.nextGaussian(0, (origImg.width + origImg.height) / 200));
+        } while (isOutOfBounds(xPaint, yPaint));
+      } else {
+        xPaint = rng.nextInt(0, origImg.width);
+        yPaint = rng.nextInt(0, origImg.height);
+      }
       color c = origImg.get(xOrig, yOrig);
       paintImg.set(xPaint, yPaint, c);
     }
