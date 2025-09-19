@@ -19,7 +19,7 @@ static class Perm implements Iterable<Integer> {
     }
   }
 
-  @Override Iterator<Integer> iterator() {
+  @Override synchronized Iterator<Integer> iterator() {
     return new Iterator<>() {
       int pos = 0;
       @Override boolean hasNext() {
@@ -27,7 +27,11 @@ static class Perm implements Iterable<Integer> {
       }
 
       @Override Integer next() {
-        return perm[pos++];
+        if (pos < perm.length) {
+          return perm[pos++];
+        } else {
+          return 0;
+        }
       }
     };
   }

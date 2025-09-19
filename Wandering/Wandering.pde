@@ -1,7 +1,8 @@
-import java.util.SplittableRandom; //<>// //<>// //<>//
+import java.util.SplittableRandom; //<>// //<>// //<>// //<>//
 import java.awt.Rectangle;
 import java.awt.GraphicsDevice;
 import java.awt.GraphicsEnvironment;
+import java.awt.event.InputEvent;
 import java.util.Random;
 import java.util.Deque;
 import java.util.List;
@@ -10,35 +11,48 @@ import java.util.BitSet;
 import java.util.Collections;
 import java.util.LinkedList;
 
+// The Voynich microscope:
+// tourLengthBase: 41.666664, tourLength: 262144, bifurcationP: 1.0E-6, globalOpacity: 1.0
+// scanIncrement: 0, scale: 4, saveScale: 1, deviation: 0.072000004, curveBase: 0.009233277
+// pathDeviation: 0.0, refinements: 5393
+
+final static float OPACITY_THRESHOLD = 0.01;
+
 PImage baseImg;
 PImage origImg;
 PImage paintImg;
-int scale;
-int saveScale;
-SplittableRandom rng;
-SplittableRandom rng2;
-float deviation;
-float bifurcationProbability;
-float tourLengthBase;
 int surfaceWidth;
 int surfaceHeight;
 int panX;
 int panY;
 int startPanX;
 int startPanY;
-boolean prioritizeSimilar;
-boolean avoidUsed;
-boolean edgeCollisionTerminates;
-boolean isRunning;
-boolean isPanning;
-float pathDeviation;
-int scanIncrement;
-float curveBase;
-Iterator<Integer> scanPermIt;
-float globalOpacity;
-BitSet used;
-color previousColor;
-float zoom;
+
+// private static class WanderingParams {
+  boolean prioritizeSimilar;
+  int refinementAttempts;
+  boolean avoidUsed;
+  boolean edgeCollisionTerminates;
+  boolean isRunning;
+  boolean isPanning;
+  float pathDeviation;
+  int scanIncrement;
+  float noiseLevel;
+  float curveBase;
+  Iterator<Integer> scanPermIt;
+  float globalOpacity;
+  BitSet used;
+  color previousColor;
+  float zoom;
+  float frameWidth;
+  boolean followColors;
+  int scale;
+  int saveScale;
+  SplittableRandom rng;
+  float deviation;
+  float bifurcationProbability;
+  float tourLengthBase;
+// }
 
 void setup() {
   selectScreen();
@@ -52,11 +66,9 @@ void setup() {
   saveScale = 1;
   zoom = 1;
   curveBase = 0;
+  frameWidth = 0.001;
   noLoop();
   used = new BitSet();
-  for (int i = 0; i < 32; i++) {
-    println(sin(i * TWO_PI / 32));
-  }
   // windowResizable(true);
 }
 
@@ -102,6 +114,12 @@ void rescale() {
   origImg.resize(baseImg.width * scale, baseImg.height * scale);
   paintImg.resize(baseImg.width * scale, baseImg.height * scale);
   origImg.loadPixels();
+  for (int pIdx = 0; pIdx < origImg.pixels.length; pIdx++) {
+    color c = origImg.pixels[pIdx];
+    c = rgbWithHsbTweak(origImg.pixels[pIdx], (float) rng.nextGaussian(0, noiseLevel * 10), (float) rng.nextGaussian(0, noiseLevel / 5), (float) rng.nextGaussian(0, noiseLevel));
+    //  c = rgbWithHsbTweak(origImg.pixels[pIdx], 0, (float) 0, (float) rng.nextGaussian(0, noiseLevel));
+    origImg.pixels[pIdx] = c;
+  }
   paintImg.loadPixels();
 }
 
@@ -139,7 +157,7 @@ void fileSelected(File selection) {
 }
 
 int tweak(float v) {
-  return (int) (v * rng.nextFloat(1 - deviation, 1 + deviation));
+  return (int) (v + rng.nextGaussian(0, deviation));
 }
 
 void mouseWheel(MouseEvent event) {
@@ -226,22 +244,24 @@ void mouseDragged() {
 }
 
 int getTourLength() {
-  return (int) min(origImg.width + origImg.height, max(20, (origImg.width + origImg.height) * tourLengthBase));
+  return (int) min((origImg.width + origImg.height) * 16, max(20, (origImg.width + origImg.height) * tourLengthBase));
 }
 
 void showParams() {
   println("tourLengthBase: " + tourLengthBase + ", tourLength: " + getTourLength() + ", bifurcationP: " + bifurcationProbability +
     ", globalOpacity: " + globalOpacity + ", scanIncrement: " + scanIncrement + ", scale: " + scale +
-    ", saveScale: " + saveScale + ", deviation: " + deviation + ", curveBase: " + curveBase + ", pathDeviation: " + pathDeviation);
+    ", saveScale: " + saveScale + ", deviation: " + deviation + ", curveBase: " + curveBase + ", pathDeviation: " + pathDeviation +
+    ", refinements: " + refinementAttempts + ", noiseLevel: " + noiseLevel);
 }
 
 void keyReleased() {
   key = 0;
 }
 
-void keyPressed() {
+void keyPressed(KeyEvent e) {
+
   if (key == 65535 || key == ' ') {
-    // Ignore plain shift key.
+    // Ignore plain shift key and space.
     return;
   }
   switch(key) {
@@ -251,21 +271,43 @@ void keyPressed() {
   case  '-':
     tourLengthBase = max(tourLengthBase / 1.2, 1E-8);
     break;
-  case '0':
   case '1':
-  case '2':
   case '3':
-  case '4':
   case '5':
-  case '6':
   case '7':
-  case '8':
   case '9':
+    int width = key - '0';
+    if (width == 1) {
+      width = 21;
+    }
+    print("Blurring with width: " + width + "...");
+    gaussianBlur(paintImg, width, 1);
+    println("Done!");
+    break;
+  case '0':
+  case '2':
+  case '4':
+  case '6':
+  case '8':
     float blend = (key - '0') * 0.1;
     if (blend == 0) {
       blend = 1;
     }
     normalize(paintImg, blend);
+    break;
+  case 'q':
+    frameWidth = max(frameWidth / 1.2, 0.001);
+    println("frameWidth: " + frameWidth);
+    break;
+  case 'Q':
+    frameWidth = min(frameWidth * 1.2, 0.1);
+    println("frameWidth: " + frameWidth);
+    break;
+  case 'w':
+    frame(0xFFFFFF);
+    break;
+  case 'W':
+    frame(0);
     break;
   case 'F':
     curveBase = constrain(curveBase * 1.2f + 1E-6, 1E-4, TWO_PI);
@@ -274,22 +316,44 @@ void keyPressed() {
     curveBase = max(0, curveBase / 1.2f - 1E-4);
     break;
   case 'R':
-    scanIncrement = max(scanIncrement * 2, 2);
-    tourLengthBase = constrain(tourLengthBase * 1.3, 1E-4, 12);
-    used = new BitSet();
-    scanPermIt = new Perm(getScanMax(), rng.nextInt()).iterator();
+    scanIncrement = max(scanIncrement, 16);
+    scanIncrement = min(scanIncrement * 2, origImg.width - 1);
+    if (scanIncrement < origImg.width - 1) {
+      tourLengthBase = constrain(tourLengthBase * 1.3, 1E-4, 12);
+      used = new BitSet();
+      scanPermIt = new Perm(getScanMax(), rng.nextInt()).iterator();
+    }
     break;
   case 'r':
     scanIncrement = max(scanIncrement / 2, 0);
-    tourLengthBase = constrain(tourLengthBase / 1.3, 1E-4, 100);
-    used = new BitSet();
-    scanPermIt = new Perm(getScanMax(), rng.nextInt()).iterator();
+    if (scanIncrement < 16) {
+      scanIncrement = 0;
+    }
+    if (scanIncrement > 0) {
+      tourLengthBase = constrain(tourLengthBase / 1.3, 1E-4, 100);
+      used = new BitSet();
+      scanPermIt = new Perm(getScanMax(), rng.nextInt()).iterator();
+    }
     break;
   case 'D':
     deviation = constrain(deviation * 1.2, 0.0001, 1);
     break;
   case 'd':
     deviation = constrain(deviation / 1.2, 0.0001, 1);
+    break;
+  case 'T':
+    refinementAttempts = (int) (refinementAttempts * 1.5 + 1);
+    break;
+  case 't':
+    refinementAttempts = (int) max(refinementAttempts / 1.5 - 1, 0);
+    break;
+  case 'N':
+    noiseLevel = noiseLevel * 1.5 + 0.01;
+    rescale();
+    break;
+  case 'n':
+    noiseLevel = max(0, noiseLevel / 1.5 - 0.01);
+    rescale();
     break;
   case 'Z':
     scale += 1;
@@ -306,13 +370,13 @@ void keyPressed() {
     saveScale = max(1, saveScale - 1);
     break;
   case 'B':
-    bifurcationProbability = constrain(bifurcationProbability * 1.5, 1E-6, 1 - 1E-6);
+    bifurcationProbability = constrain(bifurcationProbability * 1.5, 0, 1 - 1E-6);
     break;
   case 'b':
-    bifurcationProbability = constrain(bifurcationProbability / 1.5, 1E-6, 1 - 1E-6);
+    bifurcationProbability = constrain(bifurcationProbability / 1.5, 1E-10, 1 - 1E-6);
     break;
   case 'O':
-    globalOpacity = min(globalOpacity * 1.1, 2);
+    globalOpacity = min(globalOpacity * 1.1 + 0.01, 5);
     break;
   case 'o':
     globalOpacity = max(globalOpacity / 1.1, 1E-3);
@@ -320,14 +384,24 @@ void keyPressed() {
   case 's':
     String filename = "Wandering-" + System.currentTimeMillis() + ".png";
     print("Saving " + filename + "... ");
-    PImage scaledImg = paintImg.copy();
-    scaledImg.resize(baseImg.width * saveScale, baseImg.height * saveScale);
+    PImage scaledImg;
+    if (saveScale != 1) {
+      scaledImg = createImage(paintImg.width / saveScale, paintImg.height / saveScale, RGB);
+      scaledImg.copy(paintImg, 0, 0, origImg.width, origImg.height, 0, 0, paintImg.width / saveScale, paintImg.height / saveScale);
+    } else {
+      scaledImg = paintImg;
+    }
+    print("\tscaledImg w: " + scaledImg.width + ", h: " + scaledImg.height + ". ");
     scaledImg.save(filename);
     println("Done!");
     break;
   case 'c':
     prioritizeSimilar = !prioritizeSimilar;
     println("prioritize similar: " + prioritizeSimilar);
+    break;
+  case 'C':
+    followColors = !followColors;
+    println("follow colors: " + followColors);
     break;
   case 'P':
     pathDeviation = constrain(pathDeviation * 1.2 + 1E-4, 0, 20);
@@ -344,9 +418,11 @@ void keyPressed() {
     println("egde collision terminates: " + edgeCollisionTerminates);
     break;
   case DELETE:
+  case BACKSPACE:
     paintImg.loadPixels();
+    int v = e.isShiftDown() ? 0xFFFFFF : 0;
     for (int i = 0; i < paintImg.pixels.length; i++) {
-      paintImg.pixels[i] = 0;
+      paintImg.pixels[i] = v;
     }
     break;
   default:
@@ -354,6 +430,46 @@ void keyPressed() {
   }
   showParams();
 }
+
+int[] findLargeDiscrepancy(int attempts, int size) {
+  float maxDiff = 0;
+  float diffSum = 0.0;
+  int worstX = 0;
+  int worstY = 0;
+  BitSet checked = new BitSet();
+
+  for (int i = 0; i < attempts; i++) {
+    int x;
+    int y;
+    int p;
+    do {
+      x = rng.nextInt(0, origImg.width);
+      y = rng.nextInt(0, origImg.height);
+      p = x + y * paintImg.width;
+    } while (checked.get(p));
+
+    for (int xd = -size; xd <= size; xd++) {
+      for (int yd = -size; yd <= size; yd++) {
+        int xo = constrain(x + xd * scale * 2, 0, paintImg.width - 1);
+        int yo = constrain(y + yd * scale * 2, 0, paintImg.height - 1);
+        p = xo + yo * paintImg.width;
+        checked.set(p);
+        float diff = colorDistance(origImg.pixels[p], paintImg.pixels[p]);
+        diffSum += diff;
+      }
+    }
+    if (diffSum > maxDiff) {
+      worstX = x;
+      worstY = y;
+      maxDiff = diffSum;
+    }
+  }
+
+  return new int[] {worstX, worstY};
+}
+
+long findSum = 0;
+long finds = 0;
 
 void draw() {
   if (paintImg != null && origImg != null) {
@@ -372,7 +488,19 @@ void draw() {
       } else {
         if (!prioritizeSimilar) {
           if (scanIncrement == 0) {
-            if (avoidUsed) {
+            if (refinementAttempts > 0) {
+              // Test med 472 försök, radie 0.
+              // Test med 472 försök, radie 5.
+              // Test med 472 försök, radie 3.
+              // Test med 139 försök, radie 3, mul 2.
+              long beginFind = System.nanoTime();
+              int[] xy = findLargeDiscrepancy(refinementAttempts, 2);
+              x = xy[0];
+              y = xy[1];
+              long nanosInFind = System.nanoTime() - beginFind;
+              findSum += nanosInFind;
+              finds++;
+            } else if (avoidUsed) {
               for (int j = 0; j < 50 && used.get(x + origImg.width * y); j++) {
                 x = rng.nextInt(0, origImg.width);
                 y = rng.nextInt(0, origImg.height);
@@ -429,8 +557,10 @@ void draw() {
       if (!prioritizeSimilar) {
         previousColor = lerpColor(previousColor, c, 0.01);
       }
-      color cNew = rgbWithHsbTweak(c, (float) rng.nextGaussian(0, deviation * 100), 0, 0);
-      if (curveBase > 0) {
+      color cNew = rgbWithHsbTweak(c, (float) rng.nextGaussian(0, deviation * 100), (float) rng.nextGaussian(0, deviation), 0);
+      if (followColors) {
+        wanderFollow(x, y, cNew, tourLength);
+      } else if (curveBase > 0) {
         wander3(x, y, cNew, tourLength);
       } else if (pathDeviation > 0) {
         wander1(x, y, cNew, tourLength);
@@ -449,6 +579,9 @@ void draw() {
       popMatrix();
     }
   }
+  if (frameCount % 10 == 0 && finds > 0 && refinementAttempts > 0) {
+    println(SHIFT + " time spent in findLargeDifference: " + (findSum / (float) finds / 1000000) + " ms.");
+  }
 }
 
 int getScanMax() {
@@ -456,6 +589,38 @@ int getScanMax() {
     return 0;
   }
   return (origImg.width / scanIncrement) * (origImg.height / scanIncrement);
+}
+
+float getOpacity(int currentStep, int tourLength) {
+  return globalOpacity <= 0 ? 0 : (float) (1 - barron(currentStep / (float) tourLength, 16 / globalOpacity, 0));
+}
+
+// Painterly: tourLengthBase: 12.0, tourLength: 245028, bifurcationP: 0.010000001, globalOpacity: 1.0, scanIncrement: 128, scale: 7, saveScale: 1, deviation: 0.05, curveBase: 0.0, pathDeviation: 0.0, refinements: 3571, noiseLevel: 0.039475307
+
+void frame(color frameColor) {
+  boolean oldEdgeTermination = edgeCollisionTerminates;
+  edgeCollisionTerminates = true;
+  int edgeOffset = (int) ((origImg.width + origImg.height) * frameWidth);
+  globalOpacity = 1;
+  float oldTourLengthBase = tourLengthBase;
+  tourLengthBase = edgeOffset * 0.1;
+  print("edgeOffset: " + edgeOffset + ", ");
+  for (int base = 0; base < edgeOffset; base++) {
+    for (int x = base; x < origImg.width; x += 4 + base) {
+      wander2(x, base, frameColor, getTourLength());
+      wander2(x, origImg.height - base - 1, frameColor, getTourLength());
+    }
+    for (int y = base; y < origImg.height; y += 4 + base) {
+      wander2(base, y, frameColor, getTourLength());
+      wander2(origImg.width - base - 1, y, frameColor, getTourLength());
+    }
+    print(edgeOffset - base - 1 + ", ");
+  }
+  println("Done framing!");
+  println("Frame made, setting opacity to 0!");
+  globalOpacity = 0;
+  edgeCollisionTerminates = oldEdgeTermination;
+  tourLengthBase = oldTourLengthBase;
 }
 
 void wander1(int x, int y, color cNew, int tourLength) {
@@ -479,19 +644,22 @@ void wander1(int x, int y, color cNew, int tourLength) {
     0.70710677, 0.83146966, 0.9238795, 0.9807853};
 
   float dir = rng.nextInt(0, xs.length);
-  float opacity = 1.0;
-  float decay = 1.0f / tourLength;
+  double opacity = 1.0;
+  List<Integer> bifurcationPoints = new LinkedList<>();
+
   for (int steps = 0; steps < tourLength; steps++) {
     color cOld = paintImg.get((int) xp, (int) yp);
-    color cMix = lerpColor(cOld, cNew, min(1.0, globalOpacity * opacity));
+    color cMix = lerpColor(cOld, cNew, min(1.0, (float) (globalOpacity * opacity)));
     paintImg.set((int) xp, (int) yp, cMix);
+    bifurcationPoints.add((int) xp + (int) yp * origImg.width);
     if (rng.nextFloat() < bifurcationProbability) {
-    //  dir = rng.nextInt(0, xs.length);
-      xp = x;
-      yp = y;
+      int p = bifurcationPoints.remove(rng.nextInt(bifurcationPoints.size() / 2, bifurcationPoints.size()));
+      xp = p % origImg.width;
+      yp = p / origImg.width;
+      dir += (rng.nextInt(0, 2) - 1) * 3;
     }
     if (pathDeviation > 0) {
-      dir = (dir + (float) rng.nextGaussian(pathDeviation, pathDeviation) + xs.length) % xs.length;
+      dir = (dir + (float) rng.nextGaussian(0, pathDeviation) + xs.length) % xs.length;
     } else {
       dir = (dir + rng.nextInt(-2, 3) * 0.5 + xs.length) % xs.length;
     }
@@ -499,7 +667,9 @@ void wander1(int x, int y, color cNew, int tourLength) {
     float yd = ys[(int) dir];
     xp = constrain(xp + xd, 0, origImg.width - 1);
     yp = constrain(yp + yd, 0, origImg.height - 1);
-    opacity -= decay;
+    if (opacity * globalOpacity < OPACITY_THRESHOLD) {
+      return;
+    }
   }
 }
 
@@ -510,7 +680,6 @@ void wander2(int x, int y, color cNew, int tourLength) {
   List<Integer> ps = new LinkedList<>();
   BitSet visited = new BitSet();
   float opacity = 1.0;
-  float decay = 1.0f / tourLength;
 
   for (int steps = 0; steps < tourLength; steps++) {
     color cOld = paintImg.get(x, y);
@@ -518,7 +687,11 @@ void wander2(int x, int y, color cNew, int tourLength) {
     ps.add(x + y * origImg.width);
     color cMix = lerpColor(cOld, cNew, min(1.0, globalOpacity * opacity));
     paintImg.set(x, y, cMix);
-    opacity -= decay;
+    //  println("step: " + steps + ", opacity: " + opacity + ", globalOpacity: " + globalOpacity + ", ratio to next: " + (opacity / getOpacity(steps, tourLength)));
+    opacity = getOpacity(steps, tourLength);
+    if (opacity * globalOpacity < OPACITY_THRESHOLD) {
+      return;
+    }
     int d = rng.nextInt(xs.length);
     int xd = xs[d];
     int yd = ys[d];
@@ -537,7 +710,7 @@ void wander2(int x, int y, color cNew, int tourLength) {
       int cy = 0;
       if (rng.nextFloat() < bifurcationProbability && !ps.isEmpty()) {
         // Bifurcate.
-        int p = ps.remove(rng.nextInt(ps.size()));
+        int p = ps.remove(rng.nextInt(ps.size() / 2, ps.size()));
         x = p % origImg.width;
         y = p / origImg.width;
       }
@@ -563,80 +736,88 @@ void wander2(int x, int y, color cNew, int tourLength) {
       }
       dos = shuffle(xs.length, rng);
       //      Collections.shuffle(ps, new Random(10));
-      int p = ps.remove(rng.nextInt(ps.size()));
+      int p = ps.remove(rng.nextInt(ps.size() / 2, ps.size()));
       x = p % origImg.width;
       y = p / origImg.width;
     }
   }
 }
 
-void wander3a(int x, int y, color cNew, int tourLength) {
-  float thetaBase = rng.nextFloat(-PI, PI);
-  float theta = 0;
-  float curveAngle = (float) ((rng.nextBoolean() ? curveBase : -curveBase) * rng.nextGaussian(1, 0.001));
-  float curveIncrement = (curveAngle < 0 ? -curveBase : curveBase) / origImg.width;
-  float opacity = 1.0;
-  float angleScale = 1000.0 / (origImg.width * origImg.height) * curveIncrement;
-  float decay = 1.0f / tourLength;
+void wanderFollow(int x, int y, color cNew, int tourLength) {
+  int[] xs = {1, 1, 0, -1, -1, -1, 0, 1};
+  int[] ys = {0, -1, -1, -1, 0, 1, 1, 1};
+  int[] dos = shuffle(xs.length, rng);
   List<Integer> ps = new LinkedList<>();
-  BitSet painted = new BitSet();
-  float ox = x;
-  float oy = y;
-  float xs = x;
-  float ys = y;
+  BitSet visited = new BitSet();
+  float opacity = 1.0;
 
   for (int steps = 0; steps < tourLength; steps++) {
-    ps.add((int) xs + (int) ys * origImg.width);
-
-    for (int ix = -scale / 2; ix <= scale / 2; ix++) {
-      for (int iy = -scale / 2; iy <= scale / 2; iy++) {
-        int xo = (int) (xs + ix);
-        int yo = (int) (ys + iy);
-        if (xo >= 0 && xo < origImg.width && yo >= 0 && yo < origImg.height) {
-          if (!painted.get(xo + origImg.width * yo)) {
-            color cOld = paintImg.get(xo, yo);
-            color cMix = lerpColor(cOld, cNew, min(1.0, globalOpacity * opacity));
-            paintImg.set(xo, yo, cMix);
-            painted.set(xo + origImg.width * yo);
-          }
-        }
-      }
-    }
-    opacity -= decay;
-    theta += curveAngle;
-    xs = xs + sin(thetaBase + theta);
-    ys = ys + cos(thetaBase + theta);
-    if (isOutOfBounds((int) xs, (int) ys)) {
-      if (!ps.isEmpty()) {
-        int p = ps.remove(rng.nextInt(ps.size()));
-        xs = p % origImg.width;
-        ys = p / origImg.width;
-        curveAngle = Math.signum(-curveAngle) * curveBase;
-        curveIncrement *= -1;
-      } else {
+    color cOld = paintImg.get(x, y);
+    visited.set(x + y * origImg.width);
+    ps.add(x + y * origImg.width);
+    color cMix = lerpColor(cOld, cNew, min(1.0, globalOpacity * opacity));
+    paintImg.set(x, y, cMix);
+    opacity = getOpacity(steps, tourLength);
+    int d = rng.nextInt(xs.length);
+    int xd = xs[d];
+    int yd = ys[d];
+    if (!edgeCollisionTerminates) {
+      x = (x + xd + origImg.width) % origImg.width;
+      y = (y + yd + origImg.height) % origImg.height;
+    } else {
+      x = x + xd;
+      y = y + yd;
+      if (isOutOfBounds(x, y)) {
         return;
       }
     }
-    if (rng.nextFloat() < bifurcationProbability && !ps.isEmpty()) {
-      int p = ps.remove(rng.nextInt(ps.size()));
-      xs = p % origImg.width;
-      ys = p / origImg.width;
-      curveAngle = Math.signum(-curveAngle) * curveBase;
-      curveIncrement *= -1;
+    while (visited.get(x + y * origImg.width)) {
+      int cx = 0;
+      int cy = 0;
+      if (rng.nextFloat() < bifurcationProbability && !ps.isEmpty()) {
+        // Bifurcate.
+        int p = ps.remove(rng.nextInt(ps.size() / 2, ps.size()));
+        x = p % origImg.width;
+        y = p / origImg.width;
+      }
+      for (int i = 0; i < xs.length; i++) {
+        if (!edgeCollisionTerminates) {
+          cx = (x + xs[dos[i]] + origImg.width) % origImg.width;
+          cy = (y + ys[dos[i]] + origImg.height) % origImg.height;
+        } else {
+          cx = x + xs[dos[i]];
+          cy = y + ys[dos[i]];
+          if (isOutOfBounds(cx, cy)) {
+            return;
+          }
+        }
+        if (!visited.get(cx + cy * origImg.width)) {
+          break;
+        }
+      }
+      if (cx != x || cy != y) {
+        x = cx;
+        y = cy;
+        break;
+      }
+      dos = shuffle(xs.length, rng);
+      //      Collections.shuffle(ps, new Random(10));
+      int p = ps.remove(rng.nextInt(ps.size() / 2, ps.size()));
+      x = p % origImg.width;
+      y = p / origImg.width;
     }
-    curveAngle += curveIncrement;
-    curveAngle -= (pow(xs - ox, 2) + pow(ys - oy, 2)) * angleScale;
   }
 }
 
 void wander3(int x, int y, color cNew, int tourLength) {
-  float thetaBase = rng.nextFloat(-PI, PI);
+  //  float thetaBase = rng.nextFloat(-PI, PI);
+  float thetaBase = (float) rng.nextGaussian(PI / 2, 1);
   float theta = 0;
   float curveAngle = (float) ((rng.nextBoolean() ? curveBase : -curveBase) * rng.nextGaussian(1, 0.001));
   float curveIncrement = (curveAngle < 0 ? -curveBase : curveBase) / origImg.width;
-  float opacity = 1.0;
+  double opacity = 1.0 / (scale * scale);
   float angleScale = 10000.0 / (origImg.width * origImg.height) * curveIncrement;
-  float decay = 1.0f / tourLength;
+  double decay = (float) Math.pow(0.001, 1.0 / tourLength);
   List<Integer> ps = new LinkedList<>();
   BitSet painted = new BitSet();
   float ox = x;
@@ -647,29 +828,36 @@ void wander3(int x, int y, color cNew, int tourLength) {
   for (int steps = 0; steps < tourLength; steps++) {
     ps.add((int) xs + (int) ys * origImg.width);
 
-    for (int ix = -scale / 2; ix <= scale / 2; ix++) {
-      for (int iy = -scale / 2; iy <= scale / 2; iy++) {
+    for (int ix = (int) -scale / 2; ix <= scale / 2; ix++) {
+      for (int iy = (int) -scale / 2; iy <= scale / 2; iy++) {
         int xo = (int) (xs + ix);
         int yo = (int) (ys + iy);
-        if (xo >= 0 && xo < origImg.width && yo >= 0 && yo < origImg.height) {
-          if (!painted.get(xo + origImg.width * yo)) {
-            color cOld = paintImg.get(xo, yo);
-            color cMix = lerpColor(cOld, cNew, min(1.0, globalOpacity * opacity));
-            paintImg.set(xo, yo, cMix);
-            painted.set(xo + origImg.width * yo);
-          }
+        if (!edgeCollisionTerminates || (xo >= 0 && xo < origImg.width && yo >= 0 && yo < origImg.height)) {
+          xo = (xo + origImg.width) % origImg.width;
+          yo = (yo + origImg.height) % origImg.height;
+          //if (!painted.get(xo + origImg.width * yo)) {
+          color cOld = paintImg.get(xo, yo);
+          float opacityScale = 1.0f / sqrt((ix * ix + iy * iy)) / (scale * scale / 4);
+          color cMix = lerpColor(cOld, cNew, min(1.0, (float) (globalOpacity * opacity * opacityScale)));
+          paintImg.set(xo, yo, cMix);
+          painted.set(xo + origImg.width * yo);
+          // }
         }
       }
     }
     // tourLengthBase: 0.35831818, tourLength: 9755, bifurcationP: 5.8527646E-4, globalOpacity: 1.0, scanIncrement: 0, scale: 3, saveScale: 1, deviation: 0.05, curveBase: 0.0045748698
 
-    opacity -= decay;
+    opacity = getOpacity(steps, tourLength);
+    if (opacity * globalOpacity < OPACITY_THRESHOLD) {
+      return;
+    }
+
     theta += curveAngle;
     xs = xs + sin(thetaBase + theta);
     ys = ys + cos(thetaBase + theta);
-    if (isOutOfBounds((int) xs, (int) ys)) {
+    if (edgeCollisionTerminates && isOutOfBounds((int) xs, (int) ys)) {
       if (!ps.isEmpty()) {
-        int p = ps.remove(rng.nextInt(ps.size()));
+        int p = ps.remove(rng.nextInt(ps.size() / 2, ps.size()));
         xs = p % origImg.width;
         ys = p / origImg.width;
         curveAngle = Math.signum(-curveAngle) * curveBase;
@@ -677,9 +865,12 @@ void wander3(int x, int y, color cNew, int tourLength) {
       } else {
         return;
       }
+    } else {
+      xs = (xs + origImg.width) % origImg.width;
+      ys = (ys + origImg.height) % origImg.height;
     }
-    if (rng.nextFloat() < bifurcationProbability && !ps.isEmpty()) {
-      int p = ps.remove(rng.nextInt(ps.size()));
+    if (rng.nextFloat() < bifurcationProbability * decay * pow(pow(xs - ox, 2) + pow(ys - oy, 2), 0.7) && !ps.isEmpty()) {
+      int p = ps.remove(rng.nextInt(ps.size() / 2, ps.size()));
       xs = p % origImg.width;
       ys = p / origImg.width;
       curveAngle = Math.signum(-curveAngle) * curveBase;
