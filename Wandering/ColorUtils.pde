@@ -129,6 +129,6 @@ void normalize(PImage img, float blend) {
     r = (int) constrain(lerp(r, (r - rMin) * rScale, blend), 0, 255);
     g = (int) constrain(lerp(g, (g - gMin) * gScale, blend), 0, 255);
     b = (int) constrain(lerp(b, (b - bMin) * bScale, blend), 0, 255);
-    img.pixels[i] = (r << 16) | (g << 8) | (b << 0); //<>//
+    img.pixels[i] = (r << 16) | (g << 8) | (b << 0); //<>// //<>// //<>// //<>//
   }
 }
