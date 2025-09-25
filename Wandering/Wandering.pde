@@ -69,6 +69,7 @@ private static class WanderingParams {
   float deviation;
   float bifurcationProbability;
   float tourLengthBase;
+  float feedback;
 }
 
 WanderingParams wp;
@@ -114,7 +115,7 @@ private WeightedCoordinate removeFirst() {
     do {
       wc = differenceCandidates.first();
       differenceCandidates.remove(wc);
-      diff = colorDistance(origImg.get(wc.x, wc.y), paintImg.get(wc.x, wc.y));
+      diff = colorDistance(getColor(wc.x, wc.y), paintImg.get(wc.x, wc.y));
     } while (!differenceCandidates.isEmpty() && Math.abs(diff - wc.weight) > 0.05);
     return wc;
   }
@@ -168,7 +169,7 @@ private void startDifferenceThread() {
                 for (int yd = -SIZE; yd <= SIZE; yd++) {
                   int xo = constrain(x + xd, 0, w - 1);
                   int yo = constrain(y + yd, 0, h - 1);
-                  float diff = colorDistance(origImg.get(xo, yo), paintImg.get(xo, yo)) + dRng.nextFloat(0, 1E-8);
+                  float diff = colorDistance(getColor(xo, yo), paintImg.get(xo, yo)) + dRng.nextFloat(0, 1E-8);
                   diffSum += diff;
                 }
               }
@@ -238,21 +239,30 @@ void selectScreen() {
 }
 
 void rescale() {
-  origImg = baseImg.copy();
-  origImg.resize(baseImg.width * wp.scale, baseImg.height * wp.scale);
-  paintImg.resize(baseImg.width * wp.scale, baseImg.height * wp.scale);
-  origImg.loadPixels();
-  for (int pIdx = 0; pIdx < origImg.pixels.length; pIdx++) {
-    color c = origImg.pixels[pIdx];
-    c = rgbWithHsbTweak(origImg.pixels[pIdx],
-      (float) wp.rng.nextGaussian(0, wp.noiseLevel * 10),
-      (float) wp.rng.nextGaussian(0, wp.noiseLevel / 5),
-      (float) wp.rng.nextGaussian(0, wp.noiseLevel));
-    origImg.pixels[pIdx] = c;
+  try {
+    origImg = baseImg.copy();
+    origImg.resize(baseImg.width * wp.scale, baseImg.height * wp.scale);
+    paintImg.resize(baseImg.width * wp.scale, baseImg.height * wp.scale);
+    origImg.loadPixels();
+
+    for (int pIdx = 0; pIdx < origImg.pixels.length; pIdx++) {
+      color c = origImg.pixels[pIdx];
+      c = rgbWithHsbTweak(origImg.pixels[pIdx],
+        (float) wp.rng.nextGaussian(0, wp.noiseLevel * 10),
+        (float) wp.rng.nextGaussian(0, wp.noiseLevel / 5),
+        (float) wp.rng.nextGaussian(0, wp.noiseLevel));
+      origImg.pixels[pIdx] = c;
+      paintImg.loadPixels();
+      wp.used = new BitSet();
+    }
+    pointHistogram = new PointHistogram(origImg.width, origImg.height);
   }
-  paintImg.loadPixels();
-  wp.used = new BitSet();
-  pointHistogram = new PointHistogram(baseImg.width * wp.scale, baseImg.height * wp.scale);
+  catch(OutOfMemoryError e) {
+    System.err.println("Out of memory. Reverting to scale " + wp.scale + ".");
+    wp.scale--;
+    // Recover by regenerating images.
+    rescale();
+  }
 }
 
 void fileSelected(File selection) {
@@ -442,6 +452,12 @@ void keyPressed(KeyEvent e) {
   case 'W':
     frame(0);
     break;
+  case 'L':
+    wp.feedback = min(wp.feedback * 1.2f + 1E-6, 1);
+    break;
+  case 'l':
+    wp.feedback = max(0, wp.feedback / 1.2f - 1E-4);
+    break;
   case 'F':
     wp.curveBase = constrain(wp.curveBase * 1.2f + 1E-6, 1E-4, TWO_PI);
     break;
@@ -479,7 +495,7 @@ void keyPressed(KeyEvent e) {
     int maxMax = 0;
     for (IntPoint2D p : maxHits) {
       //      println("x: " + p.x + ", y: " + p.y + ", hits: " + pointHistogram.getHits(p.x, p.y));
-      wander2(p.x, p.y, origImg.get(p.x, p.y));
+      wander2(p.x, p.y, getColor(p.x, p.y));
       frozen.set(p.x + p.y * origImg.width);
       maxMax = Math.max(maxMax, pointHistogram.getHits(p.x, p.y));
     }
@@ -627,6 +643,16 @@ void updateCanvas() {
   }
 }
 
+color getColor(int x, int y) {
+  color orig = origImg.get(x, y);
+  color paint = paintImg.get(x, y);
+
+  if (USE_MIXBOX) {
+    return Mixbox.lerp(orig, paint, wp.feedback);
+  }
+  return lerpColor(orig, paint, wp.feedback);
+}
+
 void draw() {
   try {
     if (paintImg != null && origImg != null) {
@@ -641,7 +667,7 @@ void draw() {
           int scaledY = (int) ((mouseY - panY) / zoom);
           x = (int) constrain((int) (wp.rng.nextGaussian(scaledX, baseImg.width * 0.01) * origImg.width / width), 0, origImg.width - 1);
           y = (int) constrain((int) (wp.rng.nextGaussian(scaledY, baseImg.height * 0.01) * origImg.height / height), 0, origImg.height - 1);
-          wp.previousColor = origImg.get(x, y);
+          wp.previousColor = getColor(x, y);
         } else {
           if (!wp.prioritizeSimilar) {
             if (!wp.useSobol) {
@@ -696,7 +722,7 @@ void draw() {
             for (int cIdx = 0; cIdx < 50; cIdx++) {
               int cx = wp.rng.nextInt(0, origImg.width);
               int cy = wp.rng.nextInt(0, origImg.height);
-              float diff = colorDistance(wp.previousColor, origImg.get(cx, cy));
+              float diff = colorDistance(wp.previousColor, getColor(cx, cy));
               if (diff < bestDiff) {
                 bestX = cx;
                 bestY = cy;
@@ -707,7 +733,7 @@ void draw() {
             y = bestY;
           }
         }
-        color c = origImg.get(x, y);
+        color c = getColor(x, y);
         if (!wp.prioritizeSimilar) {
           wp.previousColor = lerpColor(wp.previousColor, c, 0.01);
         }
@@ -779,6 +805,7 @@ void displayHud(WanderingParams wp) {
     "deviation: " +wp.deviation,
     "bifurcationProbability: " +wp.bifurcationProbability,
     "tourLengthBase: " + wp.tourLengthBase + ", tourLength: " + getTourLength(),
+    "feedback: " + wp.feedback,
     "base image: " + baseImg.width + " x " + baseImg.height + ", paint image: " + paintImg.width + " x " + paintImg.height,
     "fragments / frame: " + ((float) drawnFragments / fragmentFrames)
     ), 20);
