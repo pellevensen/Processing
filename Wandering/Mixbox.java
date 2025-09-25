@@ -59,7 +59,8 @@ public final class Mixbox {
   public static int lerp(int color1, int color2, float t) {
     final float[] latent1 = rgbToLatent(color1);
     final float[] latent2 = rgbToLatent(color2);
-
+    t = Math.max(0, Math.min(t, 1));
+    
     float[] latentMix = new float[LATENT_SIZE];
 
     for (int i = 0; i < LATENT_SIZE; i++) {
@@ -487,7 +488,7 @@ public final class Mixbox {
       byte[] deflatedBytes = new byte[113551 - 192];
       //            DataInputStream dis = new DataInputStream(Mixbox.class.getResourceAsStream("mixbox_lut.dat"));
 
-      File lutFile = new File(ImageProcessor5Pelle.SKETCH_ROOT + "/data/" + "mixbox_lut.dat");
+      File lutFile = new File(Wandering.SKETCH_ROOT + "/data/" + "mixbox_lut.dat");
       DataInputStream dis = new DataInputStream(new FileInputStream(lutFile));
 
       dis.skipBytes(192);
