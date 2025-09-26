@@ -1,4 +1,4 @@
-import java.util.SplittableRandom; //<>// //<>// //<>// //<>// //<>// //<>// //<>// //<>// //<>//
+import java.util.SplittableRandom; //<>// //<>// //<>// //<>// //<>// //<>// //<>// //<>// //<>// //<>//
 import java.awt.Rectangle;
 import java.awt.GraphicsDevice;
 import java.awt.GraphicsEnvironment;
@@ -14,6 +14,9 @@ import java.util.NavigableSet;
 import java.util.TreeSet;
 import java.util.LinkedList;
 import java.util.concurrent.ConcurrentSkipListSet;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.Queue;
 
 // The Voynich microscope:
 // tourLengthBase: 41.666664, tourLength: 262144, bifurcationP: 1.0E-6, globalOpacity: 1.0
@@ -23,6 +26,7 @@ import java.util.concurrent.ConcurrentSkipListSet;
 final static boolean USE_MIXBOX = true;
 final static float OPACITY_THRESHOLD = 0.001;
 static String SKETCH_ROOT;
+static final int MAX_QUEUE_SIZE = 1000;
 
 volatile PImage baseImg;
 volatile PImage origImg;
@@ -37,6 +41,8 @@ int startPanY;
 boolean isRunning;
 boolean isPanning;
 boolean showHUD;
+long startTime;
+AtomicLong pointsPlotted;
 
 long findSum = 0;
 long finds = 0;
@@ -45,8 +51,13 @@ long fragmentFrames;
 NavigableSet<WeightedCoordinate> differenceCandidates;
 BitSet invalidated = new BitSet();
 Sobol2 sobol = new Sobol2();
-PointHistogram pointHistogram;
+// PointHistogram pointHistogram;
 BitSet frozen;
+ArrayBlockingQueue<DrawSequence> drawQueue;
+ArrayBlockingQueue<WanderP> wanderQueue;
+int maxThreads = 0;
+List<Thread> wanderThreads;
+Thread drawProcessor;
 
 private static class WanderingParams {
   boolean prioritizeSimilar;
@@ -96,6 +107,13 @@ void setup() {
   wp.used = new BitSet();
   frozen = new BitSet();
   differenceCandidates = new TreeSet<>();
+  drawQueue = new ArrayBlockingQueue<>(MAX_QUEUE_SIZE);
+  wanderQueue = new ArrayBlockingQueue<>(MAX_QUEUE_SIZE);
+  drawProcessor = drawProcessor(drawQueue);
+
+  wanderThreads = new ArrayList<Thread>();
+  resetTimingData();
+  drawProcessor.start();
   // windowResizable(true);
   println("Java version: " + System.getProperty("java.version"));
 }
@@ -126,6 +144,29 @@ private WeightedCoordinate removeLast() {
     WeightedCoordinate wc = differenceCandidates.last();
     differenceCandidates.remove(wc);
     return wc;
+  }
+}
+
+private void startWanderThreads() {
+  print("Stopping wander threads... ");
+  if (maxThreads != wanderThreads.size()) {
+    for (int i = 0; i < wanderThreads.size(); i++) {
+      wanderThreads.get(i).interrupt();
+      try {
+        wanderThreads.get(i).join();
+      }
+      catch(InterruptedException e) {
+        // Ignore.
+      }
+      print(i + " ");
+    }
+  }
+  wanderThreads.clear();
+  println("All wander threads stopped.\n");
+
+  for (int i = 0; i < maxThreads; i++) {
+    wanderThreads.add(wanderProcessor(this.wanderQueue, this.drawQueue, wp.rng.nextLong()));
+    wanderThreads.get(i).start();
   }
 }
 
@@ -176,7 +217,7 @@ private void startDifferenceThread() {
               diffSum *= SCALE;
               synchronized(differenceCandidates) {
                 differenceCandidates.add(new WeightedCoordinate(x, y, diffSum));
-                if (differenceCandidates.size() > (int) (h * w * 0.25f)) {
+                if (differenceCandidates.size() > (int) (h * w * 0.05f)) {
                   WeightedCoordinate wc = removeLast();
                   //  println("last: " + wc + " -- first: " + differenceCandidates.first());
                 }
@@ -255,7 +296,7 @@ void rescale() {
       paintImg.loadPixels();
       wp.used = new BitSet();
     }
-    pointHistogram = new PointHistogram(origImg.width, origImg.height);
+    // pointHistogram = new PointHistogram(origImg.width, origImg.height);
   }
   catch(OutOfMemoryError e) {
     System.err.println("Out of memory. Reverting to scale " + wp.scale + ".");
@@ -296,6 +337,7 @@ void fileSelected(File selection) {
     surface.setVisible(true);
     loop();
     startDifferenceThread();
+    startTime = System.currentTimeMillis();
   }
 }
 
@@ -445,12 +487,23 @@ void keyPressed(KeyEvent e) {
     wp.used.clear();
     sobol.reset();
     frozen.clear();
+    resetTimingData();
     break;
   case 'w':
     frame(0xFFFFFF);
     break;
   case 'W':
     frame(0);
+    break;
+  case 'K':
+    maxThreads = min(maxThreads + 1, 16);
+    startWanderThreads();
+    println("Increased number of wander threads: " + maxThreads);
+    break;
+  case 'k':
+    maxThreads = max(maxThreads - 1, 0);
+    startWanderThreads();
+    println("Decreased number of wander threads: " + maxThreads);
     break;
   case 'L':
     wp.feedback = min(wp.feedback * 1.2f + 1E-6, 1);
@@ -487,21 +540,21 @@ void keyPressed(KeyEvent e) {
     finds = 0;
     findSum = 0;
     break;
-  case 'g':
-    println("\t\tFinding largest hits, " + frozen.cardinality() + " frozen.");
-    List<IntPoint2D> maxHits = pointHistogram.getSortedPoints(origImg.width, false, frozen);
-    paintImg.loadPixels();
-    origImg.loadPixels();
-    int maxMax = 0;
-    for (IntPoint2D p : maxHits) {
-      //      println("x: " + p.x + ", y: " + p.y + ", hits: " + pointHistogram.getHits(p.x, p.y));
-      wander2(p.x, p.y, getColor(p.x, p.y));
-      frozen.set(p.x + p.y * origImg.width);
-      maxMax = Math.max(maxMax, pointHistogram.getHits(p.x, p.y));
-    }
-    paintImg.updatePixels();
-    println("Frozen: " + frozen.cardinality() + ", maxHits: " + maxMax);
-    break;
+    //  case 'g':
+    //    println("\t\tFinding largest hits, " + frozen.cardinality() + " frozen.");
+    ////     List<IntPoint2D> maxHits = pointHistogram.getSortedPoints(origImg.width, false, frozen);
+    //    paintImg.loadPixels();
+    //    origImg.loadPixels();
+    //    int maxMax = 0;
+    //    for (IntPoint2D p : maxHits) {
+    //      //      println("x: " + p.x + ", y: " + p.y + ", hits: " + pointHistogram.getHits(p.x, p.y));
+    //      wander2s(p.x, p.y, getColor(p.x, p.y));
+    //      frozen.set(p.x + p.y * origImg.width);
+    //      maxMax = Math.max(maxMax, pointHistogram.getHits(p.x, p.y));
+    //    }
+    //    paintImg.updatePixels();
+    //    println("Frozen: " + frozen.cardinality() + ", maxHits: " + maxMax);
+    //    break;
   case 'N':
     wp.noiseLevel = wp.noiseLevel * 1.5 + 0.01;
     rescale();
@@ -653,6 +706,11 @@ color getColor(int x, int y) {
   return lerpColor(orig, paint, wp.feedback);
 }
 
+void resetTimingData() {
+  startTime = System.currentTimeMillis();
+  pointsPlotted = new AtomicLong();
+}
+
 void draw() {
   try {
     if (paintImg != null && origImg != null) {
@@ -740,17 +798,34 @@ void draw() {
         color cNew = rgbWithHsbTweak(c, (float) wp.rng.nextGaussian(0, wp.deviation * 100), (float) wp.rng.nextGaussian(0, wp.deviation), 0);
         wp.used.set(x + y * origImg.width);
         this.invalidated.set(x + y  * origImg.width);
-        if (wp.followColors) {
-          println("followColors not supported yet!");
-          // wanderFollow(x, y, cNew, tourLength);
-        } else if (wp.curveBase > 0) {
-          wander3(x, y, cNew);
-        } else if (wp.pathDeviation > 0) {
-          wander1(x, y, cNew);
+        if (maxThreads > 0) {
+          final int xp = x;
+          final int yp = y;
+          final int cw = cNew;
+          if (wp.followColors) {
+            println("followColors not supported yet!");
+            // wanderFollow(x, y, cNew, tourLength);
+          } else if (wp.curveBase > 0) {
+            wanderQueue.put(new WanderP(cw, (rng) ->  wander3p(xp, yp, cw, rng)));
+          } else if (wp.pathDeviation > 0) {
+            wanderQueue.put(new WanderP(cw, (rng) ->  wander1p(xp, yp, cw, rng)));
+          } else {
+            wanderQueue.put(new WanderP(cw, (rng) ->  wander2p(xp, yp, cw, rng)));
+          }
         } else {
-          // wander0(x, y, cNew, tourLength);
-          wander2(x, y, cNew);
+          if (wp.followColors) {
+            println("followColors not supported yet!");
+            // wanderFollow(x, y, cNew, tourLength);
+          } else if (wp.curveBase > 0) {
+            pointsPlotted.addAndGet( wander3s(x, y, cNew));
+          } else if (wp.pathDeviation > 0) {
+            pointsPlotted.addAndGet(wander1s(x, y, cNew));
+          } else {
+            pointsPlotted.addAndGet(wander2s(x, y, cNew));
+            //          wander2s(x, y, cNew);
+          }
         }
+
         drawnFragments++;
       }
       paintImg.updatePixels();
@@ -758,14 +833,19 @@ void draw() {
       fragmentFrames++;
     }
     if (frameCount % 10 == 0) {
-
-      println("candidates: " + differenceCandidates.size() + ", fragments / frame: " + (float) (drawnFragments / fragmentFrames));
-      // println("Time spent in findLargeDifference: " + (findSum / (float) finds / 1000000) + " ms.");
+      float secondsSpent = (System.currentTimeMillis() - startTime) / 1000000.0;
+      println("MPoints/sec: " + getMPixelThroughput() + ", candidates: " + differenceCandidates.size() + ", fragments / frame: " + (float) (drawnFragments / fragmentFrames) +
+        "\tenqueued wanders: " + wanderQueue.size() + ", draw queue: " + drawQueue.size());
     }
   }
   catch(Exception e) {
     e.printStackTrace();
   }
+}
+
+float getMPixelThroughput() {
+   float secondsSpent = (System.currentTimeMillis() - startTime) / 1000000.0;
+   return pointsPlotted.longValue() / (float) (secondsSpent) / 1000000.0;
 }
 
 void displayHUDLines(List<String> lines, int size) {
@@ -788,6 +868,8 @@ void displayHUDLines(List<String> lines, int size) {
 }
 
 void displayHud(WanderingParams wp) {
+  float secondsSpent = (System.currentTimeMillis() - startTime) / 1000000.0;
+
   displayHUDLines(List.of(
     "prioritizeSimilar: " + wp.prioritizeSimilar,
     "refinementAttempts: " + wp.refinementAttempts,
@@ -806,8 +888,10 @@ void displayHud(WanderingParams wp) {
     "bifurcationProbability: " +wp.bifurcationProbability,
     "tourLengthBase: " + wp.tourLengthBase + ", tourLength: " + getTourLength(),
     "feedback: " + wp.feedback,
+    "maxThreads: " + maxThreads,
     "base image: " + baseImg.width + " x " + baseImg.height + ", paint image: " + paintImg.width + " x " + paintImg.height,
-    "fragments / frame: " + ((float) drawnFragments / fragmentFrames)
+    "fragments / frame: " + ((float) drawnFragments / fragmentFrames),
+    "MPoints/sec: " + getMPixelThroughput()
     ), 20);
 }
 
@@ -827,12 +911,12 @@ void frame(color frameColor) {
   print("edgeOffset: " + edgeOffset + ", ");
   for (int base = 0; base < edgeOffset; base++) {
     for (int x = base; x < origImg.width; x += 4 + base) {
-      wander2(x, base, frameColor);
-      wander2(x, origImg.height - base - 1, frameColor);
+      wander2s(x, base, frameColor);
+      wander2s(x, origImg.height - base - 1, frameColor);
     }
     for (int y = base; y < origImg.height; y += 4 + base) {
-      wander2(base, y, frameColor);
-      wander2(origImg.width - base - 1, y, frameColor);
+      wander2s(base, y, frameColor);
+      wander2s(origImg.width - base - 1, y, frameColor);
     }
     print(edgeOffset - base - 1 + ", ");
     paintImg.updatePixels();
@@ -865,293 +949,28 @@ boolean paintImage(int x, int y, int steps, int tourLength, color c) {
     paintImg.set(x, y, cMix);
     if (opacity > 0.5) {
       wp.used.set(p);
-      pointHistogram.add(p);
+      // pointHistogram.add(p);
       invalidated.set(p);
     }
   }
   return true;
 }
 
-void wander0(int x, int y, color cNew) {
-  int[] xs = {1, 1, 0, -1, -1, -1, 0, 1};
-  int[] ys = {0, -1, -1, -1, 0, 1, 1, 1};
-  int w = origImg.width;
-  int h = origImg.height;
-  int tourLength = getTourLength();
+boolean paintImage(int x, int y, color c, float opacity) {
+  color cOld = paintImg.get(x, y);
+  color cMix;
 
-  for (int i = 0; i < tourLength; i++) {
-    int dir = wp.rng.nextInt(xs.length);
-    x = (x + xs[dir] + w) % w;
-    y = (y + ys[dir] + h) % h;
-
-    if (! paintImage(x, y, i, tourLength, cNew)) {
-      break;
-    }
+  if (opacity < OPACITY_THRESHOLD) {
+    return false;
   }
-}
 
-void wander1(int x, int y, color cNew) {
-  float xp = x;
-  float yp = y;
-  float[] xs = {0.0, 0.19509032, 0.38268346, 0.55557024,
-    0.70710677, 0.83146966, 0.9238795, 0.9807853,
-    1.0, 0.98078525, 0.9238795, 0.83146954,
-    0.70710677, 0.5555702, 0.38268328, 0.19509031,
-    -8.742278E-8, -0.19509049, -0.38268343, -0.5555703,
-    -0.7071069, -0.8314698, -0.9238797, -0.98078525,
-    -1.0, -0.98078525, -0.92387944, -0.8314695,
-    -0.70710653, -0.5555703, -0.38268343, -0.19509023};
-  float[] ys = {1.0, 0.98078525, 0.9238795, 0.83146954,
-    0.70710677, 0.5555702, 0.38268328, 0.19509031,
-    -8.742278E-8, -0.19509049, -0.38268343, -0.5555703,
-    -0.7071069, -0.8314698, -0.9238797, -0.98078525,
-    -1.0, -0.98078525, -0.92387944, -0.8314695,
-    -0.70710653, -0.5555703, -0.38268343, -0.19509023,
-    0.0, 0.19509032, 0.38268346, 0.55557024,
-    0.70710677, 0.83146966, 0.9238795, 0.9807853};
-
-  float dir = wp.rng.nextInt(0, xs.length);
-  float opacity = 1.0;
-  List<Integer> bifurcationPoints = new LinkedList<>();
-  int tourLength = getTourLength();
-
-  for (int steps = 0; steps < tourLength; steps++) {
-    if (!paintImage((int) xp, (int) yp, steps, tourLength, cNew)) {
-      break;
-    }
-
-    bifurcationPoints.add((int) xp + (int) yp * origImg.width);
-    if (wp.rng.nextFloat() < wp.bifurcationProbability) {
-      int p = bifurcationPoints.remove(wp.rng.nextInt(bifurcationPoints.size() / 2, bifurcationPoints.size()));
-      xp = p % origImg.width;
-      yp = p / origImg.width;
-      dir += (wp.rng.nextInt(0, 2) - 1) * 3;
-    }
-    if (wp.pathDeviation > 0) {
-      dir = (dir + (float) wp.rng.nextGaussian(0, wp.pathDeviation) + xs.length) % xs.length;
-    } else {
-      dir = (dir + wp.rng.nextInt(-2, 3) * 0.5 + xs.length) % xs.length;
-    }
-    float xd = xs[(int) dir];
-    float yd = ys[(int) dir];
-    xp = constrain(xp + xd, 0, origImg.width - 1);
-    yp = constrain(yp + yd, 0, origImg.height - 1);
+  if (USE_MIXBOX) {
+    cMix = Mixbox.lerp(cOld, c, opacity);
+  } else {
+    cMix = lerpColor(cOld, c, opacity);
   }
-}
+  int p = x + y * origImg.width;
+  paintImg.set(x, y, cMix);
 
-void wander2(int x, int y, color cNew) {
-  class RP implements Comparable<RP> {
-    final int pos;
-    final int key;
-
-    public RP(int pos) {
-      key = wp.rng.nextInt();
-      this.pos = pos;
-    }
-
-    @Override int compareTo(RP other) {
-      return key < other.key ? -1 : key == other.key ? 0 : -1;
-    }
-
-    @Override boolean equals(Object o) {
-      if (o == null || o.getClass() != this.getClass()) {
-        return false;
-      }
-      if (o == this) {
-        return true;
-      }
-      RP o2 = (RP) o;
-      return key == o2.key;
-    }
-  }
-  int[] xs = {1, 1, 0, -1, -1, -1, 0, 1};
-  int[] ys = {0, -1, -1, -1, 0, 1, 1, 1};
-  int[] dos = shuffle(xs.length);
-  int ox = x;
-  int oy = y;
-  float bifTimeout = 0;
-  BitSet visited = new BitSet();
-  int tourLength = getTourLength();
-  //  ConcurrentSkipListSet<RP> coords = new ConcurrentSkipListSet<>();
-  List<Integer> ps = new ArrayList<>();
-  float opacity = 1.0;
-
-  for (int steps = 0; steps < tourLength; steps++) {
-    if (!paintImage(x, y, steps, tourLength, cNew)) {
-      break;
-    }
-
-    if (!visited.get(x + y * origImg.width)) {
-      visited.set(x + y * origImg.width);
-      //  coords.add(new RP(x + y * origImg.width));
-      ps.add(x + y * origImg.width);
-    }
-
-    if (opacity > 0.5) {
-      wp.used.set(x + y * origImg.width);
-      this.invalidated.set(x + y * origImg.width);
-    }
-    int d = wp.rng.nextInt(xs.length);
-    int xd = xs[d];
-    int yd = ys[d];
-    if (!wp.edgeCollisionTerminates) {
-      x = (x + xd + origImg.width) % origImg.width;
-      y = (y + yd + origImg.height) % origImg.height;
-    } else {
-      x = x + xd;
-      y = y + yd;
-      if (isOutOfBounds(x, y)) {
-        if (ps.isEmpty()) {
-          return;
-        }
-        int ep = wp.rng.nextInt(max(1, ps.size() / 4));
-        int p = ps.remove(ep);
-        // RP p = coords.first();
-        //   coords.remove(p);
-        x = p % origImg.width;
-        y = p / origImg.width;
-        bifTimeout = 0;
-      }
-    }
-    while (visited.get(x + y * origImg.width)) {
-      int cx = 0;
-      int cy = 0;
-      float dist = dist(x, y, ox, oy) / tourLength * 100;
-      if ((wp.rng.nextFloat() < wp.bifurcationProbability * dist || bifTimeout > 5) && !ps.isEmpty()) {
-        // Bifurcate.
-        //        int p = ps.remove(wp.rng.nextInt(ps.size() / 2, ps.size()));
-        int ep = wp.rng.nextInt(max(1, ps.size() / 4));
-        int p = ps.remove(ep);
-        x = p % origImg.width;
-        y = p / origImg.width;
-        bifTimeout = 0;
-      }
-      for (int i = 0; i < xs.length; i++) {
-        if (!wp.edgeCollisionTerminates) {
-          cx = (x + xs[dos[i]] + origImg.width) % origImg.width;
-          cy = (y + ys[dos[i]] + origImg.height) % origImg.height;
-        } else {
-          cx = x + xs[dos[i]];
-          cy = y + ys[dos[i]];
-          if (isOutOfBounds(cx, cy)) {
-            return;
-          }
-        }
-        if (!visited.get(cx + cy * origImg.width)) {
-          break;
-        }
-      }
-      if (cx != x || cy != y) {
-        x = cx;
-        y = cy;
-        break;
-      }
-      //dos = shuffle(xs.length);
-      //      Collections.shuffle(ps, new Random(10));
-      int ep = wp.rng.nextInt(max(1, ps.size() / 4));
-      int p = ps.remove(ep);
-      // RP p = coords.first();
-      //   coords.remove(p);
-      x = p % origImg.width;
-      y = p / origImg.width;
-      bifTimeout = 0;
-    }
-  }
-}
-
-// Whisks: tourLengthBase: 0.16939592, tourLength: 3458, bifurcationP: 1.2783398E-5, globalOpacity: 1.0, scanIncrement: 0, scale: 7, saveScale: 1, deviation: 0.05, curveBase: 0.0033495426, pathDeviation: 0.0, refinements: 5393, noiseLevel: 0.0
-
-void wander3(int x, int y, color cNew) {
-  //  float thetaBase = wp.rng.nextFloat(-PI, PI);
-  float thetaBase = (float) wp.rng.nextGaussian(PI / 2, 1);
-  float theta = 0;
-  float curveAngle = (float) ((wp.rng.nextBoolean() ? wp.curveBase : -wp.curveBase) * wp.rng.nextGaussian(1, 0.001));
-  float curveIncrement = (curveAngle < 0 ? -wp.curveBase : wp.curveBase) / origImg.width;
-  float opacity;
-  float angleScale = 10000.0 / (origImg.width * origImg.height) * curveIncrement;
-  int tourLength = getTourLength();
-  List<Integer> ps = new LinkedList<>();
-  BitSet painted = new BitSet();
-  float ox = x;
-  float oy = y;
-  float xs = x;
-  float ys = y;
-  float maxC = 0;
-
-  for (int steps = 0; steps < tourLength; steps++) {
-    ps.add((int) xs + (int) ys * origImg.width);
-    int xt = (int) xs;
-    int yt = (int) ys;
-    if (!wp.edgeCollisionTerminates || (xt >= 0 && xt < origImg.width && yt >= 0 && yt < origImg.height)) {
-      if (!paintImage((int) xt, (int) ys, steps, tourLength, cNew)) {
-        break;
-      }
-
-      painted.set(xt + origImg.width * yt);
-    }
-
-    theta += curveAngle;
-    xs += sin(thetaBase + theta);
-    ys += cos(thetaBase + theta);
-    if (wp.edgeCollisionTerminates && isOutOfBounds((int) xs, (int) ys)) {
-      if (!ps.isEmpty()) {
-        int low = ps.size() / 4;
-        int high = ps.size() * 3 / 4;
-        if (high - low == 0) {
-          low = 0;
-          high = ps.size();
-        }
-        int p = ps.remove(wp.rng.nextInt(low, high));
-        xs = p % origImg.width;
-        ys = p / origImg.width;
-        curveAngle = Math.signum(-curveAngle) * wp.curveBase;
-        curveIncrement *= -1;
-      } else {
-        break;
-      }
-    } else {
-      xs = (xs + origImg.width) % origImg.width;
-      ys = (ys + origImg.height) % origImg.height;
-    }
-    if (wp.rng.nextFloat() < wp.bifurcationProbability * pow(pow(xs - ox, 2) + pow(ys - oy, 2), 0.7) && !ps.isEmpty()) {
-      int low = ps.size() / 4;
-      int high = ps.size() * 3 / 4;
-      if (high - low == 0) {
-        low = 0;
-        high = ps.size();
-      }
-      int p = ps.remove(wp.rng.nextInt(low, high));
-      xs = p % origImg.width;
-      ys = p / origImg.width;
-      curveAngle = Math.signum(-curveAngle) * wp.curveBase;
-      curveIncrement *= -1;
-    }
-    curveAngle += curveIncrement;
-    curveAngle -= (pow(xs - ox, 2) + pow(ys - oy, 2)) * angleScale;
-    if (abs(curveAngle) > PI / 60) {
-      curveAngle *= 0.01;
-    }
-    maxC = max(maxC, curveAngle);
-  }
-  //   println("maxC: " + maxC);
-}
-
-boolean isOutOfBounds(int x, int y) {
-  return x < 0 || x >= origImg.width || y < 0 || y >= origImg.height;
-}
-
-int[] shuffle(int size) {
-  int[] perm = new int[size];
-  for (int i = 0; i < size; i++) {
-    perm[i] = i;
-  }
-  for (int i = size - 1; i > 0; i--) {
-    float x = wp.rng.nextFloat();
-    int r = (int) (barron(x, 0.3, 0) * (i + 1));
-
-    int t = perm[r];
-    perm[r] = perm[i];
-    perm[i] = t;
-  }
-  return perm;
+  return true;
 }

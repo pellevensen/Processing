@@ -9,9 +9,9 @@ static class Perm implements Iterable<Integer> {
   private long mask;
   private long ctr;
 
-  public Perm(int max, int seed) {
-    setupShufflePerm(max, seed);
-  }
+  //public Perm(int max, int seed) {
+  //  setupShufflePerm(max, seed);
+  //}
 
   private void setupShufflePerm(int max, int seed) {
     perm = new int[max];
@@ -40,7 +40,7 @@ static class Perm implements Iterable<Integer> {
     if (max < 1 << 24) {
       setupShufflePerm((int) max, (int) seed);
     } else {
-      this.s = (int) (64 - Long.highestOneBit(max));
+      this.s = (int) (64 - Long.numberOfLeadingZeros(max)); //<>//
       this.mask = (1L << this.s) - 1;
       this.s /= 2;
       this.mulc = 23456789;
@@ -50,7 +50,7 @@ static class Perm implements Iterable<Integer> {
     }
   }
 
-  @Override synchronized Iterator<Integer> iterator() {
+  @Override Iterator<Integer> iterator() {
     if (perm != null) {
       return new Iterator<>() {
         int pos = 0;
@@ -76,7 +76,7 @@ static class Perm implements Iterable<Integer> {
         @Override Integer next() {
           long p = 0;
           do {
-            ctr++;
+            ctr++; //<>//
             p = mix(ctr);
           } while (p >= size);
           pos++;
