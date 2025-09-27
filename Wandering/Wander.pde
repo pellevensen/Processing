@@ -214,14 +214,14 @@ int wander2s(int x, int y, color cNew) {
   int[] dos = shuffle(xs.length);
   int ox = x;
   int oy = y;
-  float bifTimeout = 0;
   BitSet visited = new BitSet();
   Set<Integer> visitedSet = new HashSet<>();
   int tourLength = getTourLength();
   List<Integer> ps = new ArrayList<>();
   float opacity = 1.0;
-  boolean useHashSet = true;
-
+  boolean useHashSet = false;
+  // Using hashSet: 0.9 MP/sec
+  float maxDist = 0;
   int steps;
 stepLoop:
   for (steps = 0; steps < tourLength; steps++) {
@@ -239,7 +239,6 @@ stepLoop:
 
       if (opacity > 0.5) {
         wp.used.set(x + y * origImg.width);
-        this.invalidated.set(x + y * origImg.width);
       }
     } else {
       if (visitedSet.add(x + y * origImg.width)) {
@@ -250,7 +249,6 @@ stepLoop:
 
       if (opacity > 0.5) {
         wp.used.set(x + y * origImg.width);
-        this.invalidated.set(x + y * origImg.width);
       }
     }
     int d = wp.rng.nextInt(xs.length);
@@ -270,20 +268,20 @@ stepLoop:
         int p = ps.remove(ep);
         x = p % origImg.width;
         y = p / origImg.width;
-        bifTimeout = 0;
       }
     }
-    while (visited.get(x + y * origImg.width)) {
+    
+    while ((useHashSet && visitedSet.contains(x + y * origImg.width)) || (!useHashSet && visited.get(x + y * origImg.width))) {
       int cx = 0;
       int cy = 0;
       float dist = dist(x, y, ox, oy) / tourLength * 100;
-      if ((wp.rng.nextFloat() < wp.bifurcationProbability * dist || bifTimeout > 5) && !ps.isEmpty()) {
+      maxDist = max(dist, maxDist);
+      if ((wp.rng.nextFloat() < wp.bifurcationProbability * dist) && !ps.isEmpty()) {
         // Bifurcate.
         int ep = wp.rng.nextInt(max(1, min(ps.size(), tourLength / 4)));
         int p = ps.remove(ep);
         x = p % origImg.width;
         y = p / origImg.width;
-        bifTimeout = 0;
       }
       for (int i = 0; i < xs.length; i++) {
         if (!wp.edgeCollisionTerminates) {
@@ -293,11 +291,12 @@ stepLoop:
           cx = x + xs[dos[i]];
           cy = y + ys[dos[i]];
           if (isOutOfBounds(cx, cy)) {
-            break stepLoop;
+            cx = x;
+            cy = y;
           }
         }
-        if (!visited.get(cx + cy * origImg.width)) {
-          break stepLoop;
+        if (!((useHashSet && visitedSet.contains(cx + cy * origImg.width)) || (!useHashSet && visited.get(cx + cy * origImg.width)))) {
+          break;
         }
       }
       if (cx != x || cy != y) {
@@ -311,9 +310,9 @@ stepLoop:
       int p = ps.remove(ep);
       x = p % origImg.width;
       y = p / origImg.width;
-      bifTimeout = 0;
     }
   }
+
   return steps;
 }
 
@@ -323,14 +322,13 @@ PixOp[] wander2p(int x, int y, color cNew, SplittableRandom rng) {
   int[] dos = shuffle(xs.length);
   int ox = x;
   int oy = y;
-  float bifTimeout = 0;
   BitSet visited = new BitSet();
   Set<Integer> visitedSet = new HashSet<>();
   int tourLength = getTourLength();
   PixOp[] tour = new PixOp[tourLength];
   int pIdx = 0;
   List<Integer> ps = new ArrayList<>();
-  boolean useHashSet = true;
+  boolean useHashSet = false;
 
   int steps;
 stepLoop:
@@ -352,7 +350,6 @@ stepLoop:
 
       if (opacity > 0.5) {
         wp.used.set(x + y * origImg.width);
-        this.invalidated.set(x + y * origImg.width);
       }
     } else {
       if (visitedSet.add(x + y * origImg.width)) {
@@ -363,7 +360,6 @@ stepLoop:
 
       if (opacity > 0.5) {
         wp.used.set(x + y * origImg.width);
-        this.invalidated.set(x + y * origImg.width);
       }
     }
     int d = wp.rng.nextInt(xs.length);
@@ -383,20 +379,18 @@ stepLoop:
         int p = ps.remove(ep);
         x = p % origImg.width;
         y = p / origImg.width;
-        bifTimeout = 0;
       }
     }
     while (visited.get(x + y * origImg.width)) {
       int cx = 0;
       int cy = 0;
       float dist = dist(x, y, ox, oy) / tourLength * 100;
-      if ((wp.rng.nextFloat() < wp.bifurcationProbability * dist || bifTimeout > 5) && !ps.isEmpty()) {
+      if (wp.rng.nextFloat() < wp.bifurcationProbability * dist && !ps.isEmpty()) {
         // Bifurcate.
         int ep = wp.rng.nextInt(max(1, min(ps.size(), tourLength / 4)));
         int p = ps.remove(ep);
         x = p % origImg.width;
         y = p / origImg.width;
-        bifTimeout = 0;
       }
       for (int i = 0; i < xs.length; i++) {
         if (!wp.edgeCollisionTerminates) {
@@ -406,11 +400,12 @@ stepLoop:
           cx = x + xs[dos[i]];
           cy = y + ys[dos[i]];
           if (isOutOfBounds(cx, cy)) {
-            break stepLoop;
+            cx = x;
+            cy = y;
           }
         }
         if (!visited.get(cx + cy * origImg.width)) {
-          break stepLoop;
+          break;
         }
       }
       if (cx != x || cy != y) {
@@ -424,7 +419,6 @@ stepLoop:
       int p = ps.remove(ep);
       x = p % origImg.width;
       y = p / origImg.width;
-      bifTimeout = 0;
     }
   }
   return tour;
@@ -451,7 +445,9 @@ int wander3s(int x, int y, color cNew) {
 
   int steps;
   for (steps = 0; steps < tourLength; steps++) {
-    ps.add((int) xs + (int) ys * origImg.width);
+    if (ps.size() < tourLength / 4) {
+      ps.add((int) xs + (int) ys * origImg.width);
+    }
     int xt = (int) xs;
     int yt = (int) ys;
     if (!wp.edgeCollisionTerminates || (xt >= 0 && xt < origImg.width && yt >= 0 && yt < origImg.height)) {
@@ -534,7 +530,9 @@ PixOp[] wander3p(int x, int y, color cNew, SplittableRandom rng) {
       break;
     }
 
-    ps.add((int) xs + (int) ys * origImg.width);
+    if (ps.size() < tourLength / 4) {
+      ps.add((int) xs + (int) ys * origImg.width);
+    }
     int xt = (int) xs;
     int yt = (int) ys;
     if (!wp.edgeCollisionTerminates || (xt >= 0 && xt < origImg.width && yt >= 0 && yt < origImg.height)) {

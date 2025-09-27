@@ -40,7 +40,7 @@ static class Perm implements Iterable<Integer> {
     if (max < 1 << 24) {
       setupShufflePerm((int) max, (int) seed);
     } else {
-      this.s = (int) (64 - Long.numberOfLeadingZeros(max)); //<>//
+      this.s = (int) (64 - Long.numberOfLeadingZeros(max));
       this.mask = (1L << this.s) - 1;
       this.s /= 2;
       this.mulc = 23456789;

@@ -26,11 +26,13 @@ import java.util.Queue;
 final static boolean USE_MIXBOX = true;
 final static float OPACITY_THRESHOLD = 0.001;
 static String SKETCH_ROOT;
-static final int MAX_QUEUE_SIZE = 1000;
+static final int MAX_QUEUE_SIZE = 2000;
 
 volatile PImage baseImg;
 volatile PImage origImg;
 volatile  PImage paintImg;
+volatile boolean isRescaling;
+float showOriginal;
 int surfaceWidth;
 int surfaceHeight;
 int panX;
@@ -125,7 +127,6 @@ private void removeAll() {
   }
 }
 
-
 private WeightedCoordinate removeFirst() {
   synchronized(differenceCandidates) {
     WeightedCoordinate wc;
@@ -177,7 +178,7 @@ private void startDifferenceThread() {
     Perm perm;
     Iterator<Integer> permIt;
     SplittableRandom dRng = new SplittableRandom(1);
-    final int SIZE = 1;
+    final int SIZE = 0;
     final float SCALE = (float) (1.0f / Math.pow(2 * SIZE + 1, 2));
 
     @Override void run() {
@@ -280,6 +281,8 @@ void selectScreen() {
 }
 
 void rescale() {
+  isRescaling = true;
+  differenceCandidates = new TreeSet<>();
   try {
     origImg = baseImg.copy();
     origImg.resize(baseImg.width * wp.scale, baseImg.height * wp.scale);
@@ -304,6 +307,9 @@ void rescale() {
     // Recover by regenerating images.
     rescale();
   }
+  drawQueue.clear();
+  wanderQueue.clear();
+  isRescaling = false;
 }
 
 void fileSelected(File selection) {
@@ -589,6 +595,12 @@ void keyPressed(KeyEvent e) {
   case 'o':
     wp.globalOpacity = max(wp.globalOpacity / 1.1, 1E-3);
     break;
+  case 'U':
+    showOriginal = min(showOriginal * 1.1 + 0.01, 1);
+    break;
+  case 'u':
+    showOriginal = max(showOriginal / 1.1 - 0.01, 0);
+    break;
   case 's':
     String filename = "Wandering-" + System.currentTimeMillis() + ".png";
     print("Saving " + filename + "... ");
@@ -684,11 +696,21 @@ int[] findUnused(int attempts) {
 void updateCanvas() {
   if (zoom == 1) {
     image(paintImg, 0, 0, width, height);
+    if (showOriginal > 0) {
+      tint(255.0, showOriginal * 255);  // Apply transparency without changing color
+      image(origImg, 0, 0, width, height);
+      tint(255.0, 255);
+    }
   } else {
     pushMatrix();
     translate(panX, panY);
     scale(zoom);
     image(paintImg, 0, 0, width, height);
+    if (showOriginal > 0) {
+      tint(255.0, showOriginal * 255);  // Apply transparency without changing color
+      image(origImg, 0, 0, width, height);
+      tint(255.0, 255);
+    }
     popMatrix();
   }
   if (showHUD) {
@@ -697,6 +719,26 @@ void updateCanvas() {
 }
 
 color getColor(int x, int y) {
+  while (isRescaling) {
+    try {
+      Thread.sleep(10);
+    }
+    catch(InterruptedException ie) {
+      // Do nothing.
+    }
+  }
+  int wo = origImg.width;
+  int ho = origImg.height;
+  int wpa = paintImg.width;
+  int hpa = paintImg.height;
+  if (wo != wpa || ho != hpa) {
+    return 0xFF000000;
+    //    println("Uh oh 1 wo: " + wo + ", wp: " + wpa + ", ho: " + ho + ", hp: " + hpa);
+  }
+  if (x < 0 || x >= wo || x >= wpa || y < 0 || y >= ho || y >= hpa) {
+    println("Uh oh! x: " + x + ", y: " + y + ", wo: " + wo + ", ho: " + ho + ", wp: " + wpa + ", hp: " + hpa);
+  }
+
   color orig = origImg.get(x, y);
   color paint = paintImg.get(x, y);
 
@@ -723,8 +765,8 @@ void draw() {
         if (mousePressed && mouseButton == LEFT && key != ' ') {
           int scaledX = (int) ((mouseX - panX) / zoom);
           int scaledY = (int) ((mouseY - panY) / zoom);
-          x = (int) constrain((int) (wp.rng.nextGaussian(scaledX, baseImg.width * 0.01) * origImg.width / width), 0, origImg.width - 1);
-          y = (int) constrain((int) (wp.rng.nextGaussian(scaledY, baseImg.height * 0.01) * origImg.height / height), 0, origImg.height - 1);
+          x = (int) constrain((int) (wp.rng.nextGaussian(scaledX, baseImg.width * 0.002) * origImg.width / width), 0, origImg.width - 1);
+          y = (int) constrain((int) (wp.rng.nextGaussian(scaledY, baseImg.height * 0.002) * origImg.height / height), 0, origImg.height - 1);
           wp.previousColor = getColor(x, y);
         } else {
           if (!wp.prioritizeSimilar) {
@@ -833,7 +875,6 @@ void draw() {
       fragmentFrames++;
     }
     if (frameCount % 10 == 0) {
-      float secondsSpent = (System.currentTimeMillis() - startTime) / 1000000.0;
       println("MPoints/sec: " + getMPixelThroughput() + ", candidates: " + differenceCandidates.size() + ", fragments / frame: " + (float) (drawnFragments / fragmentFrames) +
         "\tenqueued wanders: " + wanderQueue.size() + ", draw queue: " + drawQueue.size());
     }
@@ -844,8 +885,8 @@ void draw() {
 }
 
 float getMPixelThroughput() {
-   float secondsSpent = (System.currentTimeMillis() - startTime) / 1000000.0;
-   return pointsPlotted.longValue() / (float) (secondsSpent) / 1000000.0;
+  float secondsSpent = (System.currentTimeMillis() - startTime) / 1000.0;
+  return pointsPlotted.longValue() / (float) (secondsSpent) / 1000000.0;
 }
 
 void displayHUDLines(List<String> lines, int size) {
@@ -891,7 +932,8 @@ void displayHud(WanderingParams wp) {
     "maxThreads: " + maxThreads,
     "base image: " + baseImg.width + " x " + baseImg.height + ", paint image: " + paintImg.width + " x " + paintImg.height,
     "fragments / frame: " + ((float) drawnFragments / fragmentFrames),
-    "MPoints/sec: " + getMPixelThroughput()
+    "MPoints/sec: " + getMPixelThroughput(),
+    "draw queue size: " + this.drawQueue.size() + ", wander queue size: " + this.wanderQueue.size()
     ), 20);
 }
 
