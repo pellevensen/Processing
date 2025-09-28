@@ -132,3 +132,27 @@ void normalize(PImage img, float blend) {
     img.pixels[i] = (r << 16) | (g << 8) | (b << 0); //<>// //<>// //<>// //<>//
   }
 }
+
+// From https://stackoverflow.com/questions/596216/formula-to-determine-perceived-brightness-of-rgb-color
+private static float sRGBtoLin(int c) {
+  float cf = c * 0.003921568627; // Reciprocal of 255.
+  if ( cf <= 0.04045 ) {
+    return cf * 0.077399380805; // Reciprocal of 12.92;
+  } else {
+    // Reciprocal of 1.055 ~= 0.947867298578
+    return pow((( cf + 0.055)*0.947867298578), 2.2);
+  }
+}
+
+static float lightness(color c) {
+  int r = (c >>> 16) & 0xFF;
+  int g = (c >>> 8) & 0xFF;
+  int b = (c >>> 0) & 0xFF;
+  float y = (0.2126 * sRGBtoLin(r) + 0.7152 * sRGBtoLin(g) + 0.0722 * sRGBtoLin(b));
+  // 216/24389 ~= 0.00885645168
+  if ( y <= 0.00885645168) {       // The CIE standard states 0.008856 but 216/24389 is the intent for 0.008856451679036
+    return y * 903.296296296296296;  // The CIE standard states 903.3, but 24389/27 is the intent, making 903.296296296296296
+  } else {
+    return pow(y, (1.0/3)) * 116 - 16;
+  }
+}

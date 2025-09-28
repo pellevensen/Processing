@@ -75,109 +75,18 @@ PixOp[] wander0p(int x, int y, color cNew) {
   return tour;
 }
 
-int wander0s(int x, int y, color cNew) {
-  int[] xs = {1, 1, 0, -1, -1, -1, 0, 1};
-  int[] ys = {0, -1, -1, -1, 0, 1, 1, 1};
-  int w = origImg.width;
-  int h = origImg.height;
-  int tourLength = getTourLength();
-
-  int steps;
-  for (steps = 0; steps < tourLength; steps++) {
-    int dir = wp.rng.nextInt(xs.length);
-    x = (x + xs[dir] + w) % w;
-    y = (y + ys[dir] + h) % h;
-
-    if (! paintImage(x, y, steps, tourLength, cNew)) {
-      break;
-    }
-  }
-  return steps;
-}
-
-int wander1s(int x, int y, color cNew) {
-  float xp = x;
-  float yp = y;
-  float[] xs = {0.0, 0.19509032, 0.38268346, 0.55557024,
-    0.70710677, 0.83146966, 0.9238795, 0.9807853,
-    1.0, 0.98078525, 0.9238795, 0.83146954,
-    0.70710677, 0.5555702, 0.38268328, 0.19509031,
-    -8.742278E-8, -0.19509049, -0.38268343, -0.5555703,
-    -0.7071069, -0.8314698, -0.9238797, -0.98078525,
-    -1.0, -0.98078525, -0.92387944, -0.8314695,
-    -0.70710653, -0.5555703, -0.38268343, -0.19509023};
-  float[] ys = {1.0, 0.98078525, 0.9238795, 0.83146954,
-    0.70710677, 0.5555702, 0.38268328, 0.19509031,
-    -8.742278E-8, -0.19509049, -0.38268343, -0.5555703,
-    -0.7071069, -0.8314698, -0.9238797, -0.98078525,
-    -1.0, -0.98078525, -0.92387944, -0.8314695,
-    -0.70710653, -0.5555703, -0.38268343, -0.19509023,
-    0.0, 0.19509032, 0.38268346, 0.55557024,
-    0.70710677, 0.83146966, 0.9238795, 0.9807853};
-
-  float dir = wp.rng.nextInt(0, xs.length);
-  float opacity = 1.0;
-  List<Integer> bifurcationPoints = new LinkedList<>();
-  int tourLength = getTourLength();
-  PixOp[] tour = new PixOp[tourLength];
-  int pIdx = 0;
-
-  int steps;
-  for (steps = 0; steps < tourLength; steps++) {
-    if (!paintImage((int) xp, (int) yp, steps, tourLength, cNew)) {
-      break;
-    }
-
-    if (bifurcationPoints.size() < tourLength / 4) {
-      bifurcationPoints.add((int) xp + (int) yp * origImg.width);
-    }
-    if (wp.rng.nextFloat() < wp.bifurcationProbability && !bifurcationPoints.isEmpty()) {
-      int p = bifurcationPoints.remove(wp.rng.nextInt((bifurcationPoints.size() + 1) / 2));
-      xp = p % origImg.width;
-      yp = p / origImg.width;
-      dir += (wp.rng.nextInt(0, 2) - 1) * 3;
-    }
-    if (wp.pathDeviation > 0) {
-      dir = (dir + (float) wp.rng.nextGaussian(0, wp.pathDeviation) + xs.length) % xs.length;
-    } else {
-      dir = (dir + wp.rng.nextInt(-2, 3) * 0.5 + xs.length) % xs.length;
-    }
-    float xd = xs[(int) dir];
-    float yd = ys[(int) dir];
-    xp = constrain(xp + xd, 0, origImg.width - 1);
-    yp = constrain(yp + yd, 0, origImg.height - 1);
-  }
-  return steps;
-}
-
 PixOp[] wander1p(int x, int y, color cNew, SplittableRandom rng) {
   float xp = x;
   float yp = y;
-  float[] xs = {0.0, 0.19509032, 0.38268346, 0.55557024,
-    0.70710677, 0.83146966, 0.9238795, 0.9807853,
-    1.0, 0.98078525, 0.9238795, 0.83146954,
-    0.70710677, 0.5555702, 0.38268328, 0.19509031,
-    -8.742278E-8, -0.19509049, -0.38268343, -0.5555703,
-    -0.7071069, -0.8314698, -0.9238797, -0.98078525,
-    -1.0, -0.98078525, -0.92387944, -0.8314695,
-    -0.70710653, -0.5555703, -0.38268343, -0.19509023};
-  float[] ys = {1.0, 0.98078525, 0.9238795, 0.83146954,
-    0.70710677, 0.5555702, 0.38268328, 0.19509031,
-    -8.742278E-8, -0.19509049, -0.38268343, -0.5555703,
-    -0.7071069, -0.8314698, -0.9238797, -0.98078525,
-    -1.0, -0.98078525, -0.92387944, -0.8314695,
-    -0.70710653, -0.5555703, -0.38268343, -0.19509023,
-    0.0, 0.19509032, 0.38268346, 0.55557024,
-    0.70710677, 0.83146966, 0.9238795, 0.9807853};
 
-  float dir = wp.rng.nextInt(0, xs.length);
-  float opacity = 1.0;
   List<Integer> bifurcationPoints = new LinkedList<>();
   int tourLength = getTourLength();
   PixOp[] tour = new PixOp[tourLength];
   int pIdx = 0;
-
+  float dir = wp.rng.nextFloat(-PI, PI);
+  float opacity;
   int steps;
+
   for (steps = 0; steps < tourLength; steps++) {
     opacity = getOpacity(steps, tourLength);
     if (opacity < OPACITY_THRESHOLD) {
@@ -192,128 +101,25 @@ PixOp[] wander1p(int x, int y, color cNew, SplittableRandom rng) {
       int p = bifurcationPoints.remove(wp.rng.nextInt((bifurcationPoints.size() + 1) / 2));
       xp = p % origImg.width;
       yp = p / origImg.width;
-      dir += (wp.rng.nextInt(0, 2) - 1) * 3;
+      dir += (wp.rng.nextInt(0, 2) - 1) * 2;
     }
     if (wp.pathDeviation > 0) {
-      dir = (dir + (float) wp.rng.nextGaussian(0, wp.pathDeviation) + xs.length) % xs.length;
+      dir = (dir + (float) wp.rng.nextGaussian(0, wp.pathDeviation) + TWO_PI) % TWO_PI;
     } else {
-      dir = (dir + wp.rng.nextInt(-2, 3) * 0.5 + xs.length) % xs.length;
+      dir = (dir + (float) wp.rng.nextFloat(0, 0.2) + TWO_PI) % TWO_PI;
     }
-    float xd = xs[(int) dir];
-    float yd = ys[(int) dir];
-    xp = constrain(xp + xd, 0, origImg.width - 1);
-    yp = constrain(yp + yd, 0, origImg.height - 1);
+    float xd = sin(dir);
+    float yd = cos(dir);
+    if(wp.edgeCollisionTerminates) {
+      xp = constrain(xp + xd, 0, origImg.width - 1);
+      yp = constrain(yp + yd, 0, origImg.height - 1);
+    } else {
+      xp = (xp + xd + origImg.width) % origImg.width;
+      yp = (yp + yd + origImg.height) % origImg.height;
+    }
   }
 
   return tour;
-}
-
-int wander2s(int x, int y, color cNew) {
-  int[] xs = {1, 1, 0, -1, -1, -1, 0, 1};
-  int[] ys = {0, -1, -1, -1, 0, 1, 1, 1};
-  int[] dos = shuffle(xs.length);
-  int ox = x;
-  int oy = y;
-  BitSet visited = new BitSet();
-  Set<Integer> visitedSet = new HashSet<>();
-  int tourLength = getTourLength();
-  List<Integer> ps = new ArrayList<>();
-  float opacity = 1.0;
-  boolean useHashSet = false;
-  // Using hashSet: 0.9 MP/sec
-  float maxDist = 0;
-  int steps;
-stepLoop:
-  for (steps = 0; steps < tourLength; steps++) {
-    if (!paintImage(x, y, steps, tourLength, cNew)) {
-      break;
-    }
-
-    if (!useHashSet) {
-      if (!visited.get(x + y * origImg.width)) {
-        visited.set(x + y * origImg.width);
-        if (ps.size() < tourLength / 4) {
-          ps.add(x + y * origImg.width);
-        }
-      }
-
-      if (opacity > 0.5) {
-        wp.used.set(x + y * origImg.width);
-      }
-    } else {
-      if (visitedSet.add(x + y * origImg.width)) {
-        if (ps.size() < tourLength / 4) {
-          ps.add(x + y * origImg.width);
-        }
-      }
-
-      if (opacity > 0.5) {
-        wp.used.set(x + y * origImg.width);
-      }
-    }
-    int d = wp.rng.nextInt(xs.length);
-    int xd = xs[d];
-    int yd = ys[d];
-    if (!wp.edgeCollisionTerminates) {
-      x = (x + xd + origImg.width) % origImg.width;
-      y = (y + yd + origImg.height) % origImg.height;
-    } else {
-      x = x + xd;
-      y = y + yd;
-      if (isOutOfBounds(x, y)) {
-        if (ps.isEmpty()) {
-          break;
-        }
-        int ep = wp.rng.nextInt(max(1, min(ps.size(), tourLength / 4)));
-        int p = ps.remove(ep);
-        x = p % origImg.width;
-        y = p / origImg.width;
-      }
-    }
-    
-    while ((useHashSet && visitedSet.contains(x + y * origImg.width)) || (!useHashSet && visited.get(x + y * origImg.width))) {
-      int cx = 0;
-      int cy = 0;
-      float dist = dist(x, y, ox, oy) / tourLength * 100;
-      maxDist = max(dist, maxDist);
-      if ((wp.rng.nextFloat() < wp.bifurcationProbability * dist) && !ps.isEmpty()) {
-        // Bifurcate.
-        int ep = wp.rng.nextInt(max(1, min(ps.size(), tourLength / 4)));
-        int p = ps.remove(ep);
-        x = p % origImg.width;
-        y = p / origImg.width;
-      }
-      for (int i = 0; i < xs.length; i++) {
-        if (!wp.edgeCollisionTerminates) {
-          cx = (x + xs[dos[i]] + origImg.width) % origImg.width;
-          cy = (y + ys[dos[i]] + origImg.height) % origImg.height;
-        } else {
-          cx = x + xs[dos[i]];
-          cy = y + ys[dos[i]];
-          if (isOutOfBounds(cx, cy)) {
-            cx = x;
-            cy = y;
-          }
-        }
-        if (!((useHashSet && visitedSet.contains(cx + cy * origImg.width)) || (!useHashSet && visited.get(cx + cy * origImg.width)))) {
-          break;
-        }
-      }
-      if (cx != x || cy != y) {
-        x = cx;
-        y = cy;
-        break;
-      }
-      //dos = shuffle(xs.length);
-      //      Collections.shuffle(ps, new Random(10));
-      int ep = wp.rng.nextInt(max(1, ps.size() / 4));
-      int p = ps.remove(ep);
-      x = p % origImg.width;
-      y = p / origImg.width;
-    }
-  }
-
-  return steps;
 }
 
 PixOp[] wander2p(int x, int y, color cNew, SplittableRandom rng) {
@@ -426,84 +232,6 @@ stepLoop:
 
 // Whisks: tourLengthBase: 0.16939592, tourLength: 3458, bifurcationP: 1.2783398E-5, globalOpacity: 1.0, scanIncrement: 0, scale: 7, saveScale: 1, deviation: 0.05, curveBase: 0.0033495426, pathDeviation: 0.0, refinements: 5393, noiseLevel: 0.0
 
-int wander3s(int x, int y, color cNew) {
-  //  float thetaBase = wp.rng.nextFloat(-PI, PI);
-  float thetaBase = (float) wp.rng.nextGaussian(PI / 2, 1);
-  float theta = 0;
-  float curveAngle = (float) ((wp.rng.nextBoolean() ? wp.curveBase : -wp.curveBase) * wp.rng.nextGaussian(1, 0.001));
-  float curveIncrement = (curveAngle < 0 ? -wp.curveBase : wp.curveBase) / origImg.width;
-  float opacity;
-  float angleScale = 10000.0 / (origImg.width * origImg.height) * curveIncrement;
-  int tourLength = getTourLength();
-  List<Integer> ps = new LinkedList<>();
-  BitSet painted = new BitSet();
-  float ox = x;
-  float oy = y;
-  float xs = x;
-  float ys = y;
-  float maxC = 0;
-
-  int steps;
-  for (steps = 0; steps < tourLength; steps++) {
-    if (ps.size() < tourLength / 4) {
-      ps.add((int) xs + (int) ys * origImg.width);
-    }
-    int xt = (int) xs;
-    int yt = (int) ys;
-    if (!wp.edgeCollisionTerminates || (xt >= 0 && xt < origImg.width && yt >= 0 && yt < origImg.height)) {
-      if (!paintImage((int) xt, (int) ys, steps, tourLength, cNew)) {
-        break;
-      }
-
-      painted.set(xt + origImg.width * yt);
-    }
-
-    theta += curveAngle;
-    xs += sin(thetaBase + theta);
-    ys += cos(thetaBase + theta);
-    if (wp.edgeCollisionTerminates && isOutOfBounds((int) xs, (int) ys)) {
-      if (!ps.isEmpty()) {
-        int low = ps.size() / 4;
-        int high = ps.size() * 3 / 4;
-        if (high - low == 0) {
-          low = 0;
-          high = ps.size();
-        }
-        int p = ps.remove(wp.rng.nextInt(low, high));
-        xs = p % origImg.width;
-        ys = p / origImg.width;
-        curveAngle = Math.signum(-curveAngle) * wp.curveBase;
-        curveIncrement *= -1;
-      } else {
-        break;
-      }
-    } else {
-      xs = (xs + origImg.width) % origImg.width;
-      ys = (ys + origImg.height) % origImg.height;
-    }
-    if (wp.rng.nextFloat() < wp.bifurcationProbability * pow(pow(xs - ox, 2) + pow(ys - oy, 2), 0.7) && !ps.isEmpty()) {
-      int low = ps.size() / 4;
-      int high = ps.size() * 3 / 4;
-      if (high - low == 0) {
-        low = 0;
-        high = ps.size();
-      }
-      int p = ps.remove(wp.rng.nextInt(low, high));
-      xs = p % origImg.width;
-      ys = p / origImg.width;
-      curveAngle = Math.signum(-curveAngle) * wp.curveBase;
-      curveIncrement *= -1;
-    }
-    curveAngle += curveIncrement;
-    curveAngle -= (pow(xs - ox, 2) + pow(ys - oy, 2)) * angleScale;
-    if (abs(curveAngle) > PI / 60) {
-      curveAngle *= 0.01;
-    }
-    maxC = max(maxC, curveAngle);
-  }
-  return steps;
-}
-
 PixOp[] wander3p(int x, int y, color cNew, SplittableRandom rng) {
   //  float thetaBase = wp.rng.nextFloat(-PI, PI);
   float thetaBase = (float) wp.rng.nextGaussian(PI / 2, 1);
@@ -606,27 +334,49 @@ int[] shuffle(int size) {
   return perm;
 }
 
+void drawSequence(ArrayBlockingQueue<DrawSequence> drawQueue) throws InterruptedException {
+  if (drawQueue.isEmpty()) {
+    return;
+  }
+  DrawSequence ds = drawQueue.take();
+  PixOp[] ps = ds.ps;
+  float sumY = 0;
+  float sumX = 0;
+  float w = 0;
+  
+  int pp = 0;
+  for (pp = 0; pp < ps.length && ps[pp] != null; pp++) {
+    int x = ps[pp].p % origImg.width;
+    int y = ps[pp].p / origImg.width;
+    sumY += y * ps[pp].opacity;
+    sumX += x * ps[pp].opacity;
+    w += ps[pp].opacity;
+  }
+  
+  int deltaX = (int) (ps[0].p % origImg.width - sumX / w);
+  int deltaY = (int) (ps[0].p / origImg.width - sumY / w);
+
+  Arrays.sort(ps, 0, pp);
+  for (int i = 0; i < ps.length && ps[i] != null; i++) {
+    PixOp po = ps[i];
+    int x = (int) (po.p % origImg.width + deltaX);
+    int y = (int) (po.p / origImg.width + deltaY);
+    if (!paintImage(x, y, ds.c, po.opacity)) {
+      break;
+    }
+    pp++;
+  }
+  pointsPlotted.addAndGet(pp);
+}
+
 Thread drawProcessor(ArrayBlockingQueue<DrawSequence> drawQueue) {
   return new Thread(new Runnable() {
 
     @Override void run() {
+      println("Draw thread started.");
       while (!Thread.currentThread().isInterrupted()) {
         try {
-          DrawSequence ds = drawQueue.take();
-          PixOp[] ps = ds.ps;
-          int pp = 0;
-          for (pp = 0; pp < ps.length && ps[pp] != null; pp++) ;
-          Arrays.sort(ps, 0, pp);
-          for (int i = 0; i < ps.length && ps[i] != null; i++) {
-            PixOp po = ps[i];
-            int x = po.p % origImg.width;
-            int y = po.p / origImg.width;
-            if (!paintImage(x, y, ds.c, po.opacity)) {
-              break;
-            }
-            pp++;
-          }
-          pointsPlotted.addAndGet(pp);
+          drawSequence(drawQueue);
         }
         catch(InterruptedException ie) {
           break;
@@ -637,6 +387,15 @@ Thread drawProcessor(ArrayBlockingQueue<DrawSequence> drawQueue) {
   );
 }
 
+void wander(ArrayBlockingQueue<WanderP> wanderQueue, ArrayBlockingQueue<DrawSequence> drawQueue, SplittableRandom rng) throws InterruptedException {
+  if (wanderQueue.isEmpty()) {
+    return;
+  }
+  WanderP w = wanderQueue.take();
+  PixOp[] ps = w.wander(rng);
+  drawQueue.put(new DrawSequence(ps, w.getColor()));
+}
+
 Thread wanderProcessor(ArrayBlockingQueue<WanderP> wanderQueue, ArrayBlockingQueue<DrawSequence> drawQueue, long seed) {
   final SplittableRandom rng = new SplittableRandom(seed);
 
@@ -644,9 +403,7 @@ Thread wanderProcessor(ArrayBlockingQueue<WanderP> wanderQueue, ArrayBlockingQue
     @Override void run() {
       while (!Thread.currentThread().isInterrupted()) {
         try {
-          WanderP w = wanderQueue.take();
-          PixOp[] ps = w.wander(rng);
-          drawQueue.put(new DrawSequence(ps, w.getColor()));
+          wander(wanderQueue, drawQueue, rng);
         }
         catch(InterruptedException ie) {
           break;

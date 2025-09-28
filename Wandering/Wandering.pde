@@ -1,4 +1,4 @@
-import java.util.SplittableRandom; //<>// //<>// //<>// //<>// //<>// //<>// //<>// //<>// //<>// //<>//
+import java.util.SplittableRandom; //<>// //<>// //<>// //<>// //<>// //<>// //<>// //<>// //<>// //<>// //<>// //<>// //<>//
 import java.awt.Rectangle;
 import java.awt.GraphicsDevice;
 import java.awt.GraphicsEnvironment;
@@ -26,12 +26,15 @@ import java.util.Queue;
 final static boolean USE_MIXBOX = true;
 final static float OPACITY_THRESHOLD = 0.001;
 static String SKETCH_ROOT;
-static final int MAX_QUEUE_SIZE = 2000;
+static final int MAX_WANDER_QUEUE_SIZE = 200;
+static final int MAX_DRAW_QUEUE_SIZE = 400;
+private boolean randomizeDifferenceThread = false;
 
 volatile PImage baseImg;
 volatile PImage origImg;
 volatile  PImage paintImg;
 volatile boolean isRescaling;
+float dpi;
 float showOriginal;
 int surfaceWidth;
 int surfaceHeight;
@@ -45,7 +48,7 @@ boolean isPanning;
 boolean showHUD;
 long startTime;
 AtomicLong pointsPlotted;
-
+float bleedSize = 0;
 long findSum = 0;
 long finds = 0;
 long drawnFragments;
@@ -57,7 +60,7 @@ Sobol2 sobol = new Sobol2();
 BitSet frozen;
 ArrayBlockingQueue<DrawSequence> drawQueue;
 ArrayBlockingQueue<WanderP> wanderQueue;
-int maxThreads = 0;
+int maxThreads = 1;
 List<Thread> wanderThreads;
 Thread drawProcessor;
 
@@ -109,13 +112,15 @@ void setup() {
   wp.used = new BitSet();
   frozen = new BitSet();
   differenceCandidates = new TreeSet<>();
-  drawQueue = new ArrayBlockingQueue<>(MAX_QUEUE_SIZE);
-  wanderQueue = new ArrayBlockingQueue<>(MAX_QUEUE_SIZE);
+  drawQueue = new ArrayBlockingQueue<>(MAX_DRAW_QUEUE_SIZE);
+  wanderQueue = new ArrayBlockingQueue<>(MAX_WANDER_QUEUE_SIZE);
   drawProcessor = drawProcessor(drawQueue);
+  dpi = 300;
 
   wanderThreads = new ArrayList<Thread>();
   resetTimingData();
   drawProcessor.start();
+  startWanderThreads();
   // windowResizable(true);
   println("Java version: " + System.getProperty("java.version"));
 }
@@ -164,7 +169,6 @@ private void startWanderThreads() {
   }
   wanderThreads.clear();
   println("All wander threads stopped.\n");
-
   for (int i = 0; i < maxThreads; i++) {
     wanderThreads.add(wanderProcessor(this.wanderQueue, this.drawQueue, wp.rng.nextLong()));
     wanderThreads.get(i).start();
@@ -190,14 +194,14 @@ private void startDifferenceThread() {
               h = origImg.height;
               differenceCandidates = new TreeSet<>();
               print("Setting up perm: ");
-              perm = new Perm(h * w, 1);
+              perm = new Perm(h * w, 1, randomizeDifferenceThread);
               permIt = perm.iterator();
               print(" perm done.");
               origImg.loadPixels();
               paintImg.loadPixels();
             }
             if (!permIt.hasNext()) {
-              perm = new Perm(h * w, perm.hashCode());
+              perm = new Perm(h * w, perm.hashCode(), randomizeDifferenceThread);
               permIt = perm.iterator();
               invalidated = new BitSet();
               println("Complete scan finished. Restarting.");
@@ -280,15 +284,48 @@ void selectScreen() {
   surface.setLocation(0, 0);
 }
 
+float heightInMM() {
+  return this.origImg.height / dpi * 25.4;
+}
+
+float widthInMM() {
+  return this.origImg.width / dpi * 25.4;
+}
+
+private void fillBleed() {
+  int bleedInPixels = (int) (bleedSize * dpi / 25.4);
+  for (int y = bleedInPixels; y < origImg.height + bleedInPixels; y++) {
+    for (int x = 0; x < bleedInPixels; x++) {
+      origImg.set(x, y, origImg.get(bleedInPixels, y));
+      origImg.set(origImg.width - x - 1, y, origImg.get(origImg.width - bleedInPixels - 1, y));
+    }
+  }
+  for (int x = 0; x < origImg.width + bleedInPixels * 2; x++) {
+    for (int y = 0; y < bleedInPixels; y++) {
+      origImg.set(x, y, origImg.get(x, bleedInPixels));
+      origImg.set(x, origImg.height - y - 1, origImg.get(x, origImg.height - bleedInPixels - 1));
+    }
+  }
+}
+
 void rescale() {
   isRescaling = true;
   differenceCandidates = new TreeSet<>();
   try {
-    origImg = baseImg.copy();
-    origImg.resize(baseImg.width * wp.scale, baseImg.height * wp.scale);
-    paintImg.resize(baseImg.width * wp.scale, baseImg.height * wp.scale);
+    //    origImg = baseImg.copy();
+    int bleedInPixels = (int) (bleedSize * dpi / 25.4);
+    println("bleedInPixels: " + bleedInPixels);
+    int widthWithBleed = (int) (baseImg.width * wp.scale + bleedInPixels * 2);
+    int heightWithBleed = (int) (baseImg.height * wp.scale + bleedInPixels * 2);
+    origImg = createImage(widthWithBleed, heightWithBleed, RGB);
+    origImg.copy(baseImg, 0, 0, baseImg.width, baseImg.height, bleedInPixels, bleedInPixels,
+      baseImg.width * wp.scale, baseImg.height * wp.scale);
+    //    origImg.resize(baseImg.width * wp.scale, baseImg.height * wp.scale);
+    paintImg.resize(widthWithBleed, heightWithBleed);
     origImg.loadPixels();
-
+    if (bleedInPixels > 0) {
+      fillBleed();
+    }
     for (int pIdx = 0; pIdx < origImg.pixels.length; pIdx++) {
       color c = origImg.pixels[pIdx];
       c = rgbWithHsbTweak(origImg.pixels[pIdx],
@@ -479,13 +516,51 @@ void keyPressed(KeyEvent e) {
   case '?':
     showHUD = !showHUD;
     break;
-  case 'q':
-    wp.frameWidth = max(wp.frameWidth / 1.2, 0.001);
-    println("frameWidth: " + wp.frameWidth);
+  case 'a':
+    wp.avoidUsed = !wp.avoidUsed;
+    println("avoid used: " + wp.avoidUsed);
     break;
-  case 'Q':
-    wp.frameWidth = min(wp.frameWidth * 1.2, 0.1);
-    println("frameWidth: " + wp.frameWidth);
+  case 'B':
+    wp.bifurcationProbability = constrain(wp.bifurcationProbability * 1.5, 0, 1 - 1E-6);
+    break;
+  case 'b':
+    wp.bifurcationProbability = constrain(wp.bifurcationProbability / 1.5, 1E-10, 1 - 1E-6);
+    break;
+  case 'c':
+    wp.prioritizeSimilar = !wp.prioritizeSimilar;
+    println("prioritize similar: " + wp.prioritizeSimilar);
+    break;
+  case 'C':
+    wp.followColors = !wp.followColors;
+    println("follow colors: " + wp.followColors);
+    break;
+  case 'D':
+    wp.deviation = constrain(wp.deviation * 1.2, 0.0001, 1);
+    break;
+  case 'd':
+    wp.deviation = constrain(wp.deviation / 1.2, 0.0001, 1);
+    break;
+  case 'e':
+    wp.edgeCollisionTerminates = !wp.edgeCollisionTerminates;
+    println("egde collision terminates: " + wp.edgeCollisionTerminates);
+    break;
+  case 'F':
+    wp.curveBase = constrain(wp.curveBase * 1.2f + 1E-6, 1E-4, TWO_PI);
+    break;
+  case 'f':
+    wp.curveBase = max(0, wp.curveBase / 1.2f - 1E-4);
+    break;
+  case 'G':
+    bleedSize += 5.0;
+    break;
+  case 'g':
+    bleedSize = max(0, bleedSize - 5.0);
+    break;
+  case 'H':
+    dpi = Math.round(dpi * 1.2);
+    break;
+  case 'h':
+    dpi = Math.round(max(10, dpi / 1.2));
     break;
   case 'i':
     removeAll();
@@ -495,21 +570,19 @@ void keyPressed(KeyEvent e) {
     frozen.clear();
     resetTimingData();
     break;
-  case 'w':
-    frame(0xFFFFFF);
-    break;
-  case 'W':
-    frame(0);
-    break;
   case 'K':
     maxThreads = min(maxThreads + 1, 16);
     startWanderThreads();
     println("Increased number of wander threads: " + maxThreads);
     break;
   case 'k':
-    maxThreads = max(maxThreads - 1, 0);
+    maxThreads = max(maxThreads - 1, 1);
     startWanderThreads();
     println("Decreased number of wander threads: " + maxThreads);
+    if (maxThreads == 0) {
+      this.wanderQueue.clear();
+      this.drawQueue.clear();
+    }
     break;
   case 'L':
     wp.feedback = min(wp.feedback * 1.2f + 1E-6, 1);
@@ -517,11 +590,33 @@ void keyPressed(KeyEvent e) {
   case 'l':
     wp.feedback = max(0, wp.feedback / 1.2f - 1E-4);
     break;
-  case 'F':
-    wp.curveBase = constrain(wp.curveBase * 1.2f + 1E-6, 1E-4, TWO_PI);
+  case 'N':
+    wp.noiseLevel = wp.noiseLevel * 1.5 + 0.01;
+    rescale();
     break;
-  case 'f':
-    wp.curveBase = max(0, wp.curveBase / 1.2f - 1E-4);
+  case 'n':
+    wp.noiseLevel = max(0, wp.noiseLevel / 1.5 - 0.01);
+    rescale();
+    break;
+  case 'O':
+    wp.globalOpacity = min(wp.globalOpacity * 1.1 + 0.01, 5);
+    break;
+  case 'o':
+    wp.globalOpacity = max(wp.globalOpacity / 1.1, 1E-3);
+    break;
+  case 'P':
+    wp.pathDeviation = constrain(wp.pathDeviation * 1.2 + 1E-4, 0, 20);
+    break;
+  case 'p':
+    wp.pathDeviation = constrain(wp.pathDeviation / 1.2 - 1E-4, 0, 20);
+    break;
+  case 'q':
+    wp.frameWidth = max(wp.frameWidth / 1.2, 0.001);
+    println("frameWidth: " + wp.frameWidth);
+    break;
+  case 'Q':
+    wp.frameWidth = min(wp.frameWidth * 1.2, 0.1);
+    println("frameWidth: " + wp.frameWidth);
     break;
   case 'R':
     sobol.reset();
@@ -530,11 +625,19 @@ void keyPressed(KeyEvent e) {
   case 'r':
     wp.useSobol = false;
     break;
-  case 'D':
-    wp.deviation = constrain(wp.deviation * 1.2, 0.0001, 1);
-    break;
-  case 'd':
-    wp.deviation = constrain(wp.deviation / 1.2, 0.0001, 1);
+  case 's':
+    String filename = "Wandering-" + System.currentTimeMillis() + ".png";
+    print("Saving " + filename + "... ");
+    PImage scaledImg;
+    if (wp.saveScale != 1) {
+      scaledImg = createImage(paintImg.width / wp.saveScale, paintImg.height / wp.saveScale, RGB);
+      scaledImg.copy(paintImg, 0, 0, origImg.width, origImg.height, 0, 0, paintImg.width / wp.saveScale, paintImg.height / wp.saveScale);
+    } else {
+      scaledImg = paintImg;
+    }
+    print("\tscaledImg w: " + scaledImg.width + ", h: " + scaledImg.height + ". ");
+    scaledImg.save(filename);
+    println("Done!");
     break;
   case 'T':
     wp.refinementAttempts = (int) (wp.refinementAttempts * 1.5 + 1);
@@ -561,13 +664,27 @@ void keyPressed(KeyEvent e) {
     //    paintImg.updatePixels();
     //    println("Frozen: " + frozen.cardinality() + ", maxHits: " + maxMax);
     //    break;
-  case 'N':
-    wp.noiseLevel = wp.noiseLevel * 1.5 + 0.01;
-    rescale();
+  case 'U':
+    showOriginal = min(showOriginal * 1.1 + 0.01, 1);
     break;
-  case 'n':
-    wp.noiseLevel = max(0, wp.noiseLevel / 1.5 - 0.01);
-    rescale();
+  case 'u':
+    showOriginal = max(showOriginal / 1.1 - 0.01, 0);
+    break;
+  case 'v':
+    randomizeDifferenceThread = !randomizeDifferenceThread;
+    println("randomized diff: " + randomizeDifferenceThread);
+    break;
+  case 'w':
+    frame(0xFFFFFF);
+    break;
+  case 'W':
+    frame(0);
+    break;
+  case 'X':
+    wp.saveScale += 1;
+    break;
+  case  'x':
+    wp.saveScale = max(1, wp.saveScale - 1);
     break;
   case 'Z':
     wp.scale += 1;
@@ -577,66 +694,7 @@ void keyPressed(KeyEvent e) {
     wp.scale = max(1, wp.scale - 1);
     rescale();
     break;
-  case 'X':
-    wp.saveScale += 1;
-    break;
-  case  'x':
-    wp.saveScale = max(1, wp.saveScale - 1);
-    break;
-  case 'B':
-    wp.bifurcationProbability = constrain(wp.bifurcationProbability * 1.5, 0, 1 - 1E-6);
-    break;
-  case 'b':
-    wp.bifurcationProbability = constrain(wp.bifurcationProbability / 1.5, 1E-10, 1 - 1E-6);
-    break;
-  case 'O':
-    wp.globalOpacity = min(wp.globalOpacity * 1.1 + 0.01, 5);
-    break;
-  case 'o':
-    wp.globalOpacity = max(wp.globalOpacity / 1.1, 1E-3);
-    break;
-  case 'U':
-    showOriginal = min(showOriginal * 1.1 + 0.01, 1);
-    break;
-  case 'u':
-    showOriginal = max(showOriginal / 1.1 - 0.01, 0);
-    break;
-  case 's':
-    String filename = "Wandering-" + System.currentTimeMillis() + ".png";
-    print("Saving " + filename + "... ");
-    PImage scaledImg;
-    if (wp.saveScale != 1) {
-      scaledImg = createImage(paintImg.width / wp.saveScale, paintImg.height / wp.saveScale, RGB);
-      scaledImg.copy(paintImg, 0, 0, origImg.width, origImg.height, 0, 0, paintImg.width / wp.saveScale, paintImg.height / wp.saveScale);
-    } else {
-      scaledImg = paintImg;
-    }
-    print("\tscaledImg w: " + scaledImg.width + ", h: " + scaledImg.height + ". ");
-    scaledImg.save(filename);
-    println("Done!");
-    break;
-  case 'c':
-    wp.prioritizeSimilar = !wp.prioritizeSimilar;
-    println("prioritize similar: " + wp.prioritizeSimilar);
-    break;
-  case 'C':
-    wp.followColors = !wp.followColors;
-    println("follow colors: " + wp.followColors);
-    break;
-  case 'P':
-    wp.pathDeviation = constrain(wp.pathDeviation * 1.2 + 1E-4, 0, 20);
-    break;
-  case 'p':
-    wp.pathDeviation = constrain(wp.pathDeviation / 1.2 - 1E-4, 0, 20);
-    break;
-  case 'a':
-    wp.avoidUsed = !wp.avoidUsed;
-    println("avoid used: " + wp.avoidUsed);
-    break;
-  case 'e':
-    wp.edgeCollisionTerminates = !wp.edgeCollisionTerminates;
-    println("egde collision terminates: " + wp.edgeCollisionTerminates);
-    break;
+
   case DELETE:
   case BACKSPACE:
     paintImg.loadPixels();
@@ -840,33 +898,31 @@ void draw() {
         color cNew = rgbWithHsbTweak(c, (float) wp.rng.nextGaussian(0, wp.deviation * 100), (float) wp.rng.nextGaussian(0, wp.deviation), 0);
         wp.used.set(x + y * origImg.width);
         this.invalidated.set(x + y  * origImg.width);
-        if (maxThreads > 0) {
-          final int xp = x;
-          final int yp = y;
-          final int cw = cNew;
-          if (wp.followColors) {
-            println("followColors not supported yet!");
-            // wanderFollow(x, y, cNew, tourLength);
-          } else if (wp.curveBase > 0) {
-            wanderQueue.put(new WanderP(cw, (rng) ->  wander3p(xp, yp, cw, rng)));
-          } else if (wp.pathDeviation > 0) {
-            wanderQueue.put(new WanderP(cw, (rng) ->  wander1p(xp, yp, cw, rng)));
-          } else {
-            wanderQueue.put(new WanderP(cw, (rng) ->  wander2p(xp, yp, cw, rng)));
-          }
+        final int xp = x;
+        final int yp = y;
+        final int cw = cNew;
+        if (wp.followColors) {
+          println("followColors not supported yet!");
+          // wanderFollow(x, y, cNew, tourLength);
+        } else if (wp.curveBase > 0) {
+          wanderQueue.put(new WanderP(cw, (rng) ->  wander3p(xp, yp, cw, rng)));
+        } else if (wp.pathDeviation > 0) {
+          wanderQueue.put(new WanderP(cw, (rng) ->  wander1p(xp, yp, cw, rng)));
         } else {
-          if (wp.followColors) {
-            println("followColors not supported yet!");
-            // wanderFollow(x, y, cNew, tourLength);
-          } else if (wp.curveBase > 0) {
-            pointsPlotted.addAndGet( wander3s(x, y, cNew));
-          } else if (wp.pathDeviation > 0) {
-            pointsPlotted.addAndGet(wander1s(x, y, cNew));
-          } else {
-            pointsPlotted.addAndGet(wander2s(x, y, cNew));
-            //          wander2s(x, y, cNew);
-          }
+          wanderQueue.put(new WanderP(cw, (rng) ->  wander2p(xp, yp, cw, rng)));
         }
+        //if (maxThreads == 0) {
+        //  while (!wanderQueue.isEmpty()) {
+        //    print("Preparing to wander... ");
+        //    wander(wanderQueue, drawQueue, wp.rng.split());
+        //    print(" wandered. Preparing to draw... (wqs: " + wanderQueue.size() + ", dqs: " + drawQueue.size());
+        //    while (!drawQueue.isEmpty()) {
+        //      drawSequence(drawQueue);
+        //    }
+        //    println(" drawing done.");
+        //  }
+        //}
+    //    println("wq size: " + wanderQueue.size() + ", dq size: " + drawQueue.size());
 
         drawnFragments++;
       }
@@ -910,12 +966,14 @@ void displayHUDLines(List<String> lines, int size) {
 
 void displayHud(WanderingParams wp) {
   float secondsSpent = (System.currentTimeMillis() - startTime) / 1000000.0;
+  String DPIText = String.format("%.0f", this.dpi);
 
   displayHUDLines(List.of(
-    "prioritizeSimilar: " + wp.prioritizeSimilar,
-    "refinementAttempts: " + wp.refinementAttempts,
-    "avoidUsed: " + wp.avoidUsed + ", used density: " + (wp.used.cardinality() / (float) (origImg.width * origImg.height) * 100) + "%",
     "edgeCollisionTerminates: " + wp.edgeCollisionTerminates,
+    "refinementAttempts: " + wp.refinementAttempts,
+    "prioritizeSimilar: " + wp.prioritizeSimilar,
+    "randomize differences: " + randomizeDifferenceThread,
+    "avoidUsed: " + wp.avoidUsed + ", used density: " + (wp.used.cardinality() / (float) (origImg.width * origImg.height) * 100) + "%",
     "pathDeviation: " + wp.pathDeviation,
     "use Sobol: " + wp.useSobol,
     "noiseLevel: " + wp.noiseLevel,
@@ -923,14 +981,17 @@ void displayHud(WanderingParams wp) {
     "globalOpacity: " + wp.globalOpacity,
     "previousColor: " + (String.format("#%x", wp.previousColor & 0xFFFFFF)),
     "frameWidth: " + wp.frameWidth,
-    "scale: " + wp.scale,
-    "saveScale: " +wp.saveScale,
     "deviation: " +wp.deviation,
     "bifurcationProbability: " +wp.bifurcationProbability,
     "tourLengthBase: " + wp.tourLengthBase + ", tourLength: " + getTourLength(),
     "feedback: " + wp.feedback,
     "maxThreads: " + maxThreads,
+    "scale: " + wp.scale,
+    "saveScale: " +wp.saveScale,
     "base image: " + baseImg.width + " x " + baseImg.height + ", paint image: " + paintImg.width + " x " + paintImg.height,
+    "bleedSize at " + DPIText + " DPI: " + String.format("%.0f mm", bleedSize),
+    "size at " + DPIText + " DPI: " + String.format("%.1f x %.1f mm", baseImg.width * wp.scale / dpi * 25.4,
+    baseImg.height * wp.scale / dpi * 25.4),
     "fragments / frame: " + ((float) drawnFragments / fragmentFrames),
     "MPoints/sec: " + getMPixelThroughput(),
     "draw queue size: " + this.drawQueue.size() + ", wander queue size: " + this.wanderQueue.size()
@@ -944,32 +1005,46 @@ float getOpacity(int currentStep, int tourLength) {
 // Painterly: tourLengthBase: 12.0, tourLength: 245028, bifurcationP: 0.010000001, globalOpacity: 1.0, scanIncrement: 128, scale: 7, saveScale: 1, deviation: 0.05, curveBase: 0.0, pathDeviation: 0.0, refinements: 3571, noiseLevel: 0.039475307
 
 void frame(color frameColor) {
-  boolean oldEdgeTermination = wp.edgeCollisionTerminates;
-  wp.edgeCollisionTerminates = true;
-  int edgeOffset = (int) ((origImg.width + origImg.height) * wp.frameWidth);
-  wp.globalOpacity = 1;
-  float oldTourLengthBase = wp.tourLengthBase;
-  wp.tourLengthBase = edgeOffset * 0.1;
-  print("edgeOffset: " + edgeOffset + ", ");
-  for (int base = 0; base < edgeOffset; base++) {
-    for (int x = base; x < origImg.width; x += 4 + base) {
-      wander2s(x, base, frameColor);
-      wander2s(x, origImg.height - base - 1, frameColor);
+  try {
+    boolean oldEdgeTermination = wp.edgeCollisionTerminates;
+    wp.edgeCollisionTerminates = true;
+    int edgeOffset = (int) ((origImg.width + origImg.height) * wp.frameWidth);
+    wp.globalOpacity = 1;
+    float oldTourLengthBase = wp.tourLengthBase;
+    wp.tourLengthBase = edgeOffset * 0.1;
+    print("edgeOffset: " + edgeOffset + ", ");
+    for (int base = 0; base < edgeOffset; base++) {
+      final var baseF = base;
+      for (int x = base; x < origImg.width; x += 4 + base) {
+        final var xf = x;
+        wanderQueue.put(new WanderP(frameColor, (rng) ->  wander2p(xf, baseF, frameColor, rng)));
+        wanderQueue.put(new WanderP(frameColor, (rng) ->  wander2p(xf, origImg.height - baseF - 1, frameColor, rng)));
+      }
+      for (int y = base; y < origImg.height; y += 4 + base) {
+        final var yf = y;
+        wanderQueue.put(new WanderP(frameColor, (rng) ->  wander2p(baseF, yf, frameColor, rng)));
+        wanderQueue.put(new WanderP(frameColor, (rng) ->  wander2p(origImg.width - baseF - 1, yf, frameColor, rng)));
+      }
+      while (!wanderQueue.isEmpty()) {
+        wander(wanderQueue, drawQueue, wp.rng.split());
+        while (!drawQueue.isEmpty()) {
+          drawSequence(drawQueue);
+        }
+      }
+      print(edgeOffset - base - 1 + ", ");
+      paintImg.updatePixels();
+      updateCanvas();
+      redraw();
     }
-    for (int y = base; y < origImg.height; y += 4 + base) {
-      wander2s(base, y, frameColor);
-      wander2s(origImg.width - base - 1, y, frameColor);
-    }
-    print(edgeOffset - base - 1 + ", ");
-    paintImg.updatePixels();
-    updateCanvas();
-    redraw();
+    println("Done framing!");
+    wp.globalOpacity = 0;
+    println("Frame made, opacity set to 0.");
+    wp.edgeCollisionTerminates = oldEdgeTermination;
+    wp.tourLengthBase = oldTourLengthBase;
   }
-  println("Done framing!");
-  wp.globalOpacity = 0;
-  println("Frame made, opacity set to 0.");
-  wp.edgeCollisionTerminates = oldEdgeTermination;
-  wp.tourLengthBase = oldTourLengthBase;
+  catch(InterruptedException ie) {
+    // Do nothing.
+  }
 }
 
 boolean paintImage(int x, int y, int steps, int tourLength, color c) {

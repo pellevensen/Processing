@@ -1,4 +1,4 @@
-import java.util.Iterator;
+import java.util.Iterator; //<>//
 import java.util.SplittableRandom;
 
 static class Perm implements Iterable<Integer> {
@@ -8,6 +8,7 @@ static class Perm implements Iterable<Integer> {
   private long mulc;
   private long mask;
   private long ctr;
+  private boolean randomize;
 
   //public Perm(int max, int seed) {
   //  setupShufflePerm(max, seed);
@@ -18,13 +19,14 @@ static class Perm implements Iterable<Integer> {
     for (int i = 0; i < max; i++) {
       perm[i] = i;
     }
-
-    SplittableRandom rng = new SplittableRandom(seed);
-    for (int i = max - 1; i > 1; i--) {
-      int r = rng.nextInt(i + 1);
-      int t = perm[i];
-      perm[i] = perm[r];
-      perm[r] = t;
+    if (this.randomize) {
+      SplittableRandom rng = new SplittableRandom(seed);
+      for (int i = max - 1; i > 1; i--) {
+        int r = rng.nextInt(i + 1);
+        int t = perm[i];
+        perm[i] = perm[r];
+        perm[r] = t;
+      }
     }
   }
 
@@ -36,7 +38,8 @@ static class Perm implements Iterable<Integer> {
     return ctr;
   }
 
-  public Perm(long max, long seed) {
+  public Perm(long max, long seed, boolean randomize) {
+    this.randomize = randomize;
     if (max < 1 << 24) {
       setupShufflePerm((int) max, (int) seed);
     } else {
@@ -75,12 +78,21 @@ static class Perm implements Iterable<Integer> {
 
         @Override Integer next() {
           long p = 0;
-          do {
-            ctr++; //<>//
-            p = mix(ctr);
-          } while (p >= size);
-          pos++;
-          return (int) p;
+          if (randomize) {
+            do {
+              ctr++;
+              p = mix(ctr);
+            } while (p >= size);
+            pos++;
+            return (int) p;
+          } else {
+            ctr++;
+            if (ctr >= size) {
+              ctr = 0;
+            }
+            pos++;
+            return (int) ctr;
+          }
         }
       };
     }
