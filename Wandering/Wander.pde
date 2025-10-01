@@ -84,7 +84,7 @@ PixOp[] wander1p(int x, int y, color cNew, SplittableRandom rng) {
   PixOp[] tour = new PixOp[tourLength];
   int pIdx = 0;
   float dir = wp.rng.nextFloat(-PI, PI);
-  float opacity;
+  float opacity = 0;
   int steps;
 
   for (steps = 0; steps < tourLength; steps++) {
@@ -110,13 +110,8 @@ PixOp[] wander1p(int x, int y, color cNew, SplittableRandom rng) {
     }
     float xd = sin(dir);
     float yd = cos(dir);
-    if(wp.edgeCollisionTerminates) {
-      xp = constrain(xp + xd, 0, origImg.width - 1);
-      yp = constrain(yp + yd, 0, origImg.height - 1);
-    } else {
-      xp = (xp + xd + origImg.width) % origImg.width;
-      yp = (yp + yd + origImg.height) % origImg.height;
-    }
+    xp = (xp + xd + origImg.width) % origImg.width;
+    yp = (yp + yd + origImg.height) % origImg.height;
   }
 
   return tour;
@@ -171,22 +166,9 @@ stepLoop:
     int d = wp.rng.nextInt(xs.length);
     int xd = xs[d];
     int yd = ys[d];
-    if (!wp.edgeCollisionTerminates) {
-      x = (x + xd + origImg.width) % origImg.width;
-      y = (y + yd + origImg.height) % origImg.height;
-    } else {
-      x = x + xd;
-      y = y + yd;
-      if (isOutOfBounds(x, y)) {
-        if (ps.isEmpty()) {
-          break;
-        }
-        int ep = wp.rng.nextInt(max(1, min(ps.size(), tourLength / 4)));
-        int p = ps.remove(ep);
-        x = p % origImg.width;
-        y = p / origImg.width;
-      }
-    }
+    x = (x + xd + origImg.width) % origImg.width;
+    y = (y + yd + origImg.height) % origImg.height;
+
     while (visited.get(x + y * origImg.width)) {
       int cx = 0;
       int cy = 0;
@@ -199,17 +181,8 @@ stepLoop:
         y = p / origImg.width;
       }
       for (int i = 0; i < xs.length; i++) {
-        if (!wp.edgeCollisionTerminates) {
-          cx = (x + xs[dos[i]] + origImg.width) % origImg.width;
-          cy = (y + ys[dos[i]] + origImg.height) % origImg.height;
-        } else {
-          cx = x + xs[dos[i]];
-          cy = y + ys[dos[i]];
-          if (isOutOfBounds(cx, cy)) {
-            cx = x;
-            cy = y;
-          }
-        }
+        cx = (x + xs[dos[i]] + origImg.width) % origImg.width;
+        cy = (y + ys[dos[i]] + origImg.height) % origImg.height;
         if (!visited.get(cx + cy * origImg.width)) {
           break;
         }
@@ -263,33 +236,14 @@ PixOp[] wander3p(int x, int y, color cNew, SplittableRandom rng) {
     }
     int xt = (int) xs;
     int yt = (int) ys;
-    if (!wp.edgeCollisionTerminates || (xt >= 0 && xt < origImg.width && yt >= 0 && yt < origImg.height)) {
-      tour[pIdx++] = new PixOp(xt + yt * origImg.width, opacity);
-    }
+    tour[pIdx++] = new PixOp(xt % origImg.width + (yt % origImg.height) * origImg.width, opacity);
 
     theta += curveAngle;
     xs += sin(thetaBase + theta);
     ys += cos(thetaBase + theta);
-    if (wp.edgeCollisionTerminates && isOutOfBounds((int) xs, (int) ys)) {
-      if (!ps.isEmpty()) {
-        int low = ps.size() / 4;
-        int high = ps.size() * 3 / 4;
-        if (high - low == 0) {
-          low = 0;
-          high = ps.size();
-        }
-        int p = ps.remove(wp.rng.nextInt(low, high));
-        xs = p % origImg.width;
-        ys = p / origImg.width;
-        curveAngle = Math.signum(-curveAngle) * wp.curveBase;
-        curveIncrement *= -1;
-      } else {
-        break;
-      }
-    } else {
-      xs = (xs + origImg.width) % origImg.width;
-      ys = (ys + origImg.height) % origImg.height;
-    }
+    xs = (xs + origImg.width) % origImg.width;
+    ys = (ys + origImg.height) % origImg.height;
+
     if (wp.rng.nextFloat() < wp.bifurcationProbability * pow(pow(xs - ox, 2) + pow(ys - oy, 2), 0.7) && !ps.isEmpty()) {
       int low = ps.size() / 4;
       int high = ps.size() * 3 / 4;
@@ -342,30 +296,36 @@ void drawSequence(ArrayBlockingQueue<DrawSequence> drawQueue) throws Interrupted
   PixOp[] ps = ds.ps;
   float sumY = 0;
   float sumX = 0;
-  float w = 0;
-  
+  float pw = 0;
+  int w = origImg.width;
+  int h = origImg.height;
+
   int pp = 0;
   for (pp = 0; pp < ps.length && ps[pp] != null; pp++) {
-    int x = ps[pp].p % origImg.width;
-    int y = ps[pp].p / origImg.width;
+    int x = ps[pp].p % w;
+    int y = ps[pp].p / w;
     sumY += y * ps[pp].opacity;
     sumX += x * ps[pp].opacity;
-    w += ps[pp].opacity;
+    pw += ps[pp].opacity;
   }
-  
-  int deltaX = (int) (ps[0].p % origImg.width - sumX / w);
-  int deltaY = (int) (ps[0].p / origImg.width - sumY / w);
+
+  int deltaX = (int) (ps[0].p % w - sumX / pw);
+  int deltaY = (int) (ps[0].p / w - sumY / pw);
 
   Arrays.sort(ps, 0, pp);
+
   for (int i = 0; i < ps.length && ps[i] != null; i++) {
     PixOp po = ps[i];
-    int x = (int) (po.p % origImg.width + deltaX);
-    int y = (int) (po.p / origImg.width + deltaY);
+    int x = (int) (po.p % w + deltaX);
+    int y = (int) (po.p / w + deltaY);
+    x = (x + w) % w;
+    y = (y + h) % h;
     if (!paintImage(x, y, ds.c, po.opacity)) {
       break;
     }
     pp++;
   }
+
   pointsPlotted.addAndGet(pp);
 }
 

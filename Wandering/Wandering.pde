@@ -24,7 +24,7 @@ import java.util.Queue;
 // pathDeviation: 0.0, refinements: 5393
 
 final static boolean USE_MIXBOX = true;
-final static float OPACITY_THRESHOLD = 0.001;
+final static float OPACITY_THRESHOLD = 0.0001;
 static String SKETCH_ROOT;
 static final int MAX_WANDER_QUEUE_SIZE = 200;
 static final int MAX_DRAW_QUEUE_SIZE = 400;
@@ -32,10 +32,14 @@ private boolean randomizeDifferenceThread = false;
 
 volatile PImage baseImg;
 volatile PImage origImg;
+volatile PImage angleImg;
+volatile PImage magnitudeImg;
 volatile  PImage paintImg;
 volatile boolean isRescaling;
 float dpi;
 float showOriginal;
+float showMagnitudes;
+float showAngles;
 int surfaceWidth;
 int surfaceHeight;
 int panX;
@@ -63,6 +67,8 @@ ArrayBlockingQueue<WanderP> wanderQueue;
 int maxThreads = 1;
 List<Thread> wanderThreads;
 Thread drawProcessor;
+short[] magnitudes;
+short[] angles;
 
 private static class WanderingParams {
   boolean prioritizeSimilar;
@@ -323,6 +329,30 @@ void rescale() {
     //    origImg.resize(baseImg.width * wp.scale, baseImg.height * wp.scale);
     paintImg.resize(widthWithBleed, heightWithBleed);
     origImg.loadPixels();
+
+    short[][] magnitudeAndAngle = gradientMagnitudeAndAngle(origImg, 13);
+
+    magnitudes = magnitudeAndAngle[0];
+    angles = magnitudeAndAngle[1];
+    angleImg = createImage(origImg.width, origImg.height, RGB);
+    magnitudeImg = createImage(origImg.width, origImg.height, RGB);
+    angleImg.loadPixels();
+    magnitudeImg.loadPixels();
+    int maxM = Integer.MIN_VALUE;
+    int minM = Integer.MAX_VALUE;
+    for (int y = 0; y < origImg.height; y++) {
+      for (int x = 0; x < origImg.width; x++) {
+        int a = (angles[y * origImg.width + x] >> 8) + 128;
+        angleImg.set(x, y, color(a, a, a));
+        int m = (magnitudes[y * origImg.width + x] >>> 7) & 0xFF;
+        magnitudeImg.set(x, y, color(m, m, m));
+        maxM = max(m, maxM);
+        minM = min(m, minM);
+      }
+    }
+    println("minM: " + minM + ", maxM: " + maxM);
+    angleImg.updatePixels();
+    magnitudeImg.updatePixels();
     if (bleedInPixels > 0) {
       fillBleed();
     }
@@ -570,6 +600,14 @@ void keyPressed(KeyEvent e) {
     frozen.clear();
     resetTimingData();
     break;
+  case 'J':
+    showAngles = min(showAngles * 1.1 + 0.01, 1);
+    println("showAngles: " + showAngles);
+    break;
+  case 'j':
+    showAngles = max(showAngles / 1.1 - 0.01, 0);
+    println("showAngles: " + showAngles);
+    break;
   case 'K':
     maxThreads = min(maxThreads + 1, 16);
     startWanderThreads();
@@ -589,6 +627,12 @@ void keyPressed(KeyEvent e) {
     break;
   case 'l':
     wp.feedback = max(0, wp.feedback / 1.2f - 1E-4);
+    break;
+  case 'M':
+    showMagnitudes = min(showMagnitudes * 1.1 + 1E3, 1);
+    break;
+  case 'm':
+    showMagnitudes = max(showMagnitudes/ 1.1 - 1E3, 0);
     break;
   case 'N':
     wp.noiseLevel = wp.noiseLevel * 1.5 + 0.01;
@@ -752,23 +796,28 @@ int[] findUnused(int attempts) {
 }
 
 void updateCanvas() {
-  if (zoom == 1) {
-    image(paintImg, 0, 0, width, height);
-    if (showOriginal > 0) {
-      tint(255.0, showOriginal * 255);  // Apply transparency without changing color
-      image(origImg, 0, 0, width, height);
-      tint(255.0, 255);
-    }
-  } else {
+  if (zoom != 1) {
     pushMatrix();
     translate(panX, panY);
     scale(zoom);
-    image(paintImg, 0, 0, width, height);
-    if (showOriginal > 0) {
-      tint(255.0, showOriginal * 255);  // Apply transparency without changing color
-      image(origImg, 0, 0, width, height);
-      tint(255.0, 255);
-    }
+  }
+  image(paintImg, 0, 0, width, height);
+  if (showOriginal > 0) {
+    tint(255.0, showOriginal * 255);  // Apply transparency without changing color
+    image(origImg, 0, 0, width, height);
+    tint(255.0, 255);
+  }
+  if (showAngles > 0) {
+    tint(255.0, showAngles * 255);  // Apply transparency without changing color
+    image(angleImg, 0, 0, width, height);
+    tint(255.0, 255);
+  }
+  if (showMagnitudes > 0) {
+    tint(255.0, showMagnitudes * 255);  // Apply transparency without changing color
+    image(magnitudeImg, 0, 0, width, height);
+    tint(255.0, 255);
+  }
+  if (zoom != 1) {
     popMatrix();
   }
   if (showHUD) {
@@ -922,7 +971,7 @@ void draw() {
         //    println(" drawing done.");
         //  }
         //}
-    //    println("wq size: " + wanderQueue.size() + ", dq size: " + drawQueue.size());
+        //    println("wq size: " + wanderQueue.size() + ", dq size: " + drawQueue.size());
 
         drawnFragments++;
       }
@@ -999,7 +1048,7 @@ void displayHud(WanderingParams wp) {
 }
 
 float getOpacity(int currentStep, int tourLength) {
-  return wp.globalOpacity <= 0 ? 0 : (float) wp.globalOpacity * (1 - barron(currentStep / (float) tourLength, 16 / wp.globalOpacity, 0));
+  return wp.globalOpacity <= 0 ? 0 : (float) wp.globalOpacity * (1 - barron(currentStep / (float) tourLength, 64 / wp.globalOpacity, 0));
 }
 
 // Painterly: tourLengthBase: 12.0, tourLength: 245028, bifurcationP: 0.010000001, globalOpacity: 1.0, scanIncrement: 128, scale: 7, saveScale: 1, deviation: 0.05, curveBase: 0.0, pathDeviation: 0.0, refinements: 3571, noiseLevel: 0.039475307
