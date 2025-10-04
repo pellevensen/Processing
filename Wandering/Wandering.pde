@@ -1,4 +1,4 @@
-import java.util.SplittableRandom; //<>// //<>// //<>// //<>// //<>// //<>// //<>// //<>// //<>// //<>// //<>// //<>// //<>//
+import java.util.SplittableRandom; //<>// //<>// //<>// //<>// //<>// //<>// //<>// //<>// //<>// //<>// //<>// //<>// //<>// //<>// //<>//
 import java.awt.Rectangle;
 import java.awt.GraphicsDevice;
 import java.awt.GraphicsEnvironment;
@@ -36,6 +36,8 @@ volatile PImage angleImg;
 volatile PImage magnitudeImg;
 volatile  PImage paintImg;
 volatile boolean isRescaling;
+float magnitudeSampleRate;
+int magnitudeSamples;
 float dpi;
 float showOriginal;
 float showMagnitudes;
@@ -69,6 +71,7 @@ List<Thread> wanderThreads;
 Thread drawProcessor;
 short[] magnitudes;
 short[] angles;
+List<WeightedCoordinate> magnitudeList;
 
 private static class WanderingParams {
   boolean prioritizeSimilar;
@@ -92,6 +95,7 @@ private static class WanderingParams {
   float bifurcationProbability;
   float tourLengthBase;
   float feedback;
+  float magnitudeScale;
 }
 
 WanderingParams wp;
@@ -114,6 +118,7 @@ void setup() {
   zoom = 1;
   wp.curveBase = 0;
   wp.frameWidth = 0.001;
+  magnitudeSampleRate = 1;
   noLoop();
   wp.used = new BitSet();
   frozen = new BitSet();
@@ -194,6 +199,9 @@ private void startDifferenceThread() {
     @Override void run() {
       while (true) {
         try {
+          while (Wandering.this.wp.refinementAttempts == 0) {
+            Thread.sleep(1000);
+          }
           if (origImg != null && paintImg != null) {
             if (origImg.width != w || origImg.height != h) {
               w = origImg.width;
@@ -300,16 +308,23 @@ float widthInMM() {
 
 private void fillBleed() {
   int bleedInPixels = (int) (bleedSize * dpi / 25.4);
+  int h = origImg.height;
+  int w = origImg.width;
   for (int y = bleedInPixels; y < origImg.height + bleedInPixels; y++) {
     for (int x = 0; x < bleedInPixels; x++) {
-      origImg.set(x, y, origImg.get(bleedInPixels, y));
-      origImg.set(origImg.width - x - 1, y, origImg.get(origImg.width - bleedInPixels - 1, y));
+      color c1 = origImg.get(bleedInPixels, y);
+      color c2 = origImg.get(origImg.width - bleedInPixels - 1, y);
+      origImg.set(x, y, c1);
+      origImg.set(origImg.width - x - 1, y, c2);
     }
+    // Todo: erase border in magnitudes[...]
   }
   for (int x = 0; x < origImg.width + bleedInPixels * 2; x++) {
     for (int y = 0; y < bleedInPixels; y++) {
-      origImg.set(x, y, origImg.get(x, bleedInPixels));
-      origImg.set(x, origImg.height - y - 1, origImg.get(x, origImg.height - bleedInPixels - 1));
+      color c1 = origImg.get(x, bleedInPixels);
+      color c2 = origImg.get(x, origImg.height - bleedInPixels - 1);
+      origImg.set(x, y, c1);
+      origImg.set(x, origImg.height - y - 1, c2);
     }
   }
 }
@@ -330,6 +345,20 @@ void rescale() {
     paintImg.resize(widthWithBleed, heightWithBleed);
     origImg.loadPixels();
 
+    if (bleedInPixels > 0) {
+      fillBleed();
+    }
+    for (int pIdx = 0; pIdx < origImg.pixels.length; pIdx++) {
+      color c = origImg.pixels[pIdx];
+      c = rgbWithHsbTweak(origImg.pixels[pIdx],
+        (float) wp.rng.nextGaussian(0, wp.noiseLevel * 10),
+        (float) wp.rng.nextGaussian(0, wp.noiseLevel / 5),
+        (float) wp.rng.nextGaussian(0, wp.noiseLevel));
+      origImg.pixels[pIdx] = c;
+      paintImg.loadPixels();
+      wp.used = new BitSet();
+    }
+
     short[][] magnitudeAndAngle = gradientMagnitudeAndAngle(origImg, 13);
 
     magnitudes = magnitudeAndAngle[0];
@@ -344,7 +373,7 @@ void rescale() {
       for (int x = 0; x < origImg.width; x++) {
         int a = (angles[y * origImg.width + x] >> 8) + 128;
         angleImg.set(x, y, color(a, a, a));
-        int m = (magnitudes[y * origImg.width + x] >>> 7) & 0xFF;
+        int m = (int) (magnitudes[y * origImg.width + x] >>> 7);
         magnitudeImg.set(x, y, color(m, m, m));
         maxM = max(m, maxM);
         minM = min(m, minM);
@@ -353,19 +382,7 @@ void rescale() {
     println("minM: " + minM + ", maxM: " + maxM);
     angleImg.updatePixels();
     magnitudeImg.updatePixels();
-    if (bleedInPixels > 0) {
-      fillBleed();
-    }
-    for (int pIdx = 0; pIdx < origImg.pixels.length; pIdx++) {
-      color c = origImg.pixels[pIdx];
-      c = rgbWithHsbTweak(origImg.pixels[pIdx],
-        (float) wp.rng.nextGaussian(0, wp.noiseLevel * 10),
-        (float) wp.rng.nextGaussian(0, wp.noiseLevel / 5),
-        (float) wp.rng.nextGaussian(0, wp.noiseLevel));
-      origImg.pixels[pIdx] = c;
-      paintImg.loadPixels();
-      wp.used = new BitSet();
-    }
+
     // pointHistogram = new PointHistogram(origImg.width, origImg.height);
   }
   catch(OutOfMemoryError e) {
@@ -513,8 +530,19 @@ void keyPressed(KeyEvent e) {
     return;
   }
   switch(key) {
+  case '\'':
+    if (magnitudeList != null) {
+      println("Terminating magnitude queue.");
+      magnitudeList.clear();
+      magnitudeList = null;
+    } else {
+      print("Preparing magnitude queue... ");
+      prepareMagnitudeQueue();
+      println(" Done! Will prefer elements from queue.\n");
+    }
+    break;
   case '+':
-    wp.tourLengthBase = min(wp.tourLengthBase * 1.2, 50);
+    wp.tourLengthBase = min(wp.tourLengthBase * 1.2, 100);
     break;
   case  '-':
     wp.tourLengthBase = max(wp.tourLengthBase / 1.2, 1E-8);
@@ -542,6 +570,12 @@ void keyPressed(KeyEvent e) {
       blend = 1;
     }
     normalize(paintImg, blend);
+    break;
+  case ':':
+    magnitudeSampleRate = constrain(magnitudeSampleRate * 1.2, 1, 50);
+    break;
+  case '.':
+    magnitudeSampleRate = constrain(magnitudeSampleRate / 1.2, 1, 50);
     break;
   case '?':
     showHUD = !showHUD;
@@ -629,10 +663,12 @@ void keyPressed(KeyEvent e) {
     wp.feedback = max(0, wp.feedback / 1.2f - 1E-4);
     break;
   case 'M':
-    showMagnitudes = min(showMagnitudes * 1.1 + 1E3, 1);
+    showMagnitudes = min(showMagnitudes * 1.1 + 1E-3, 1);
+    println("showMagnitudes: " + showMagnitudes);
     break;
   case 'm':
-    showMagnitudes = max(showMagnitudes/ 1.1 - 1E3, 0);
+    showMagnitudes = max(showMagnitudes/ 1.1 - 1E-3, 0);
+    println("showMagnitudes: " + showMagnitudes);
     break;
   case 'N':
     wp.noiseLevel = wp.noiseLevel * 1.5 + 0.01;
@@ -693,21 +729,6 @@ void keyPressed(KeyEvent e) {
     finds = 0;
     findSum = 0;
     break;
-    //  case 'g':
-    //    println("\t\tFinding largest hits, " + frozen.cardinality() + " frozen.");
-    ////     List<IntPoint2D> maxHits = pointHistogram.getSortedPoints(origImg.width, false, frozen);
-    //    paintImg.loadPixels();
-    //    origImg.loadPixels();
-    //    int maxMax = 0;
-    //    for (IntPoint2D p : maxHits) {
-    //      //      println("x: " + p.x + ", y: " + p.y + ", hits: " + pointHistogram.getHits(p.x, p.y));
-    //      wander2s(p.x, p.y, getColor(p.x, p.y));
-    //      frozen.set(p.x + p.y * origImg.width);
-    //      maxMax = Math.max(maxMax, pointHistogram.getHits(p.x, p.y));
-    //    }
-    //    paintImg.updatePixels();
-    //    println("Frozen: " + frozen.cardinality() + ", maxHits: " + maxMax);
-    //    break;
   case 'U':
     showOriginal = min(showOriginal * 1.1 + 0.01, 1);
     break;
@@ -730,6 +751,13 @@ void keyPressed(KeyEvent e) {
   case  'x':
     wp.saveScale = max(1, wp.saveScale - 1);
     break;
+  case 'Y':
+    wp.magnitudeScale = min(wp.magnitudeScale * 1.1 + 0.01, 5);
+    break;
+  case 'y':
+    wp.magnitudeScale = max(wp.magnitudeScale / 1.1 - 0.01, 0);
+    break;
+
   case 'Z':
     wp.scale += 1;
     rescale();
@@ -755,6 +783,84 @@ void keyPressed(KeyEvent e) {
   showParams();
   fragmentFrames = 0;
   drawnFragments = 0;
+}
+
+void prepareMagnitudeQueue() {
+  magnitudeList = new ArrayList<>();
+  magnitudeImg.loadPixels();
+  int w = origImg.width;
+  int h = origImg.height;
+  BitSet seen = new BitSet();
+  List<WeightedCoordinate> tmpCoords = new ArrayList<>();
+
+  long magSum = 0;
+  for (short m : magnitudes) {
+    magSum += m;
+  }
+  float magLowerThreshold = magSum / (float) (w * h * pow(magnitudeSampleRate, 2)) * 1.3;
+  float magUpperThreshold = magSum / (float) (w * h * pow(magnitudeSampleRate, 2)) * 4;
+  println("mag L threshold: " + magLowerThreshold + ", mag U threshold: " + magUpperThreshold);
+
+  for (float yf = 0; yf < h; yf += magnitudeSampleRate) {
+    int y = (int) yf;
+    for (float xf = 0; xf < w; xf += magnitudeSampleRate) {
+      int x = (int) xf;
+      //  if (magnitudes[y * w + x] < magLowerThreshold || magnitudes[y * w + x] > magUpperThreshold) {
+      tmpCoords.add(new WeightedCoordinate(x, y, (magnitudes[y * w + x] & 0xFFFF) + wp.rng.nextFloat(0, 1E-1)));
+      //  }
+    }
+  }
+  print(tmpCoords.size() + " tmpCoords, sorting... ");
+  tmpCoords.sort(WeightedCoordinate::compareTo);
+  print(" Sorted. Sieving... ");
+  final int[] offsets = {-1 - 2 * w, -2 * w, 1 - 2 * w, -2 - w, -1 - w, -w, 1 - w, 2 - w, -2, -1, 1, 2, -2 + w, -1 + w, w, 1 + w, 2 + w, -1 + 2 * w, 2 * w, 1 + 2 * w};
+
+  origImg.loadPixels();
+  float distMin = Float.MAX_VALUE;
+  float distMax = Float.MIN_VALUE;
+  paintImg.loadPixels();
+
+  for (int i = 0; i < tmpCoords.size(); i++) {
+    WeightedCoordinate wc = tmpCoords.get(i);
+    if ((wc.x > 1 && wc.x < w - 2 && wc.y > 1 && wc.y < h - 2) && (magnitudes[wc.y * w + wc.x] & 0xFFFF) < 0xFFF) {
+      int baseP = wc.x + wc.y * w;
+      int seenCount = 0;
+      float diffAcc = 0;
+      color baseColor = origImg.pixels[baseP];
+      for (int j = 0; j < offsets.length; j++) {
+        seenCount += seen.get(baseP + offsets[j]) ? 1 : 0;
+        diffAcc += colorDistance(baseColor, origImg.pixels[baseP + offsets[j]]);
+      }
+      if (seenCount == 0 || diffAcc > 0.2) {
+        magnitudeList.add(wc);
+        seen.set(baseP);
+      //  paintImg.pixels[baseP] = color(255, 0, 0);
+      }
+      distMin = Math.min(distMin, diffAcc);
+      distMax = Math.max(distMax, diffAcc);
+    } else {
+      int seenCount = 0;
+      int baseP = wc.x + wc.y * w;
+      for (int j = 0; j < offsets.length; j++) {
+        for (int xo = -3; xo <= 3; xo++) {
+          for (int yo = -3; yo <= 3; yo++) {
+            int pp = baseP + constrain(wc.x + xo, 0, w - 1) + constrain(wc.y + yo, 0, h - 1) * w;
+            seenCount += seen.get(pp) ? 1 : 0;
+          }
+        }
+      }
+      if (seenCount < 6) {
+        magnitudeList.add(wc);
+        seen.set(baseP);
+  //      paintImg.pixels[baseP] = color(255, 0, 0);
+      }
+    }
+  }
+  paintImg.updatePixels();
+  magnitudeSamples = magnitudeList.size();
+  // Collections.reverse(magnitudeList);
+
+  println(" Done! Size of magnitude list: " + magnitudeList.size() + ", distMin: " + distMin + ", distMax: " + distMax);
 }
 
 int[] findUnused(int attempts) {
@@ -869,7 +975,19 @@ void draw() {
       while (System.currentTimeMillis() - startTime < 100) {
         int x = wp.rng.nextInt(0, origImg.width);
         int y = wp.rng.nextInt(0, origImg.height);
-        if (mousePressed && mouseButton == LEFT && key != ' ') {
+        if (magnitudeList != null) {
+          if (magnitudeList.isEmpty()) {
+            println("Magnitude list processed. Setting opacity to 0.");
+            wp.globalOpacity = 0;
+            magnitudeList = null;
+          } else {
+            float weight;
+            WeightedCoordinate wc = magnitudeList.remove(magnitudeList.size() - 1);
+            x = wc.x;
+            y = wc.y;
+            weight = wc.weight;
+          }
+        } else if (mousePressed && mouseButton == LEFT && key != ' ') {
           int scaledX = (int) ((mouseX - panX) / zoom);
           int scaledY = (int) ((mouseY - panY) / zoom);
           x = (int) constrain((int) (wp.rng.nextGaussian(scaledX, baseImg.width * 0.002) * origImg.width / width), 0, origImg.width - 1);
@@ -950,28 +1068,20 @@ void draw() {
         final int xp = x;
         final int yp = y;
         final int cw = cNew;
+        float mScale = (wp.magnitudeScale <= 0) ? 1 : 0.01 + wp.magnitudeScale * (1 - barron(magnitudes[x + y * origImg.width] / (float) Short.MAX_VALUE, 64 * wp.magnitudeScale, 0));
+
+        //     println("mScale: " + mScale);
+
         if (wp.followColors) {
           println("followColors not supported yet!");
           // wanderFollow(x, y, cNew, tourLength);
         } else if (wp.curveBase > 0) {
-          wanderQueue.put(new WanderP(cw, (rng) ->  wander3p(xp, yp, cw, rng)));
+          wanderQueue.put(new WanderP(cw, (rng) ->  wander3p(xp, yp, cw, mScale, rng)));
         } else if (wp.pathDeviation > 0) {
-          wanderQueue.put(new WanderP(cw, (rng) ->  wander1p(xp, yp, cw, rng)));
+          wanderQueue.put(new WanderP(cw, (rng) ->  wander1p(xp, yp, cw, mScale, rng)));
         } else {
-          wanderQueue.put(new WanderP(cw, (rng) ->  wander2p(xp, yp, cw, rng)));
+          wanderQueue.put(new WanderP(cw, (rng) ->  wander2p(xp, yp, cw, mScale, rng)));
         }
-        //if (maxThreads == 0) {
-        //  while (!wanderQueue.isEmpty()) {
-        //    print("Preparing to wander... ");
-        //    wander(wanderQueue, drawQueue, wp.rng.split());
-        //    print(" wandered. Preparing to draw... (wqs: " + wanderQueue.size() + ", dqs: " + drawQueue.size());
-        //    while (!drawQueue.isEmpty()) {
-        //      drawSequence(drawQueue);
-        //    }
-        //    println(" drawing done.");
-        //  }
-        //}
-        //    println("wq size: " + wanderQueue.size() + ", dq size: " + drawQueue.size());
 
         drawnFragments++;
       }
@@ -979,9 +1089,15 @@ void draw() {
       updateCanvas();
       fragmentFrames++;
     }
-    if (frameCount % 10 == 0) {
+    if (frameCount % 50 == 0) {
+      float mScale = 0;
+      if (magnitudeList != null && !magnitudeList.isEmpty()) {
+        WeightedCoordinate wc = magnitudeList.get(magnitudeList.size() - 1);
+        float m = magnitudes[wc.x + wc.y * origImg.width] / (float) Short.MAX_VALUE;
+        mScale = (wp.magnitudeScale <= 0) ? 1 : 0.1 + wp.magnitudeScale * (1 - barron(m, 8 * wp.magnitudeScale, 0));
+      }
       println("MPoints/sec: " + getMPixelThroughput() + ", candidates: " + differenceCandidates.size() + ", fragments / frame: " + (float) (drawnFragments / fragmentFrames) +
-        "\tenqueued wanders: " + wanderQueue.size() + ", draw queue: " + drawQueue.size());
+        "\tenqueued wanders: " + wanderQueue.size() + ", draw queue: " + drawQueue.size() + ", current gradmagnitude: " + mScale);
     }
   }
   catch(Exception e) {
@@ -1016,7 +1132,7 @@ void displayHUDLines(List<String> lines, int size) {
 void displayHud(WanderingParams wp) {
   float secondsSpent = (System.currentTimeMillis() - startTime) / 1000000.0;
   String DPIText = String.format("%.0f", this.dpi);
-
+  int pixels = paintImg.width * paintImg.height;
   displayHUDLines(List.of(
     "edgeCollisionTerminates: " + wp.edgeCollisionTerminates,
     "refinementAttempts: " + wp.refinementAttempts,
@@ -1032,6 +1148,8 @@ void displayHud(WanderingParams wp) {
     "frameWidth: " + wp.frameWidth,
     "deviation: " +wp.deviation,
     "bifurcationProbability: " +wp.bifurcationProbability,
+    "magnitude adaptation: " + wp.magnitudeScale + ", magnitude sample: " + magnitudeSampleRate,
+    "magnitude processed: " + (magnitudeList == null ? "N/A" : (float) (magnitudeSamples - magnitudeList.size()) / magnitudeSamples * 100 + "%"),
     "tourLengthBase: " + wp.tourLengthBase + ", tourLength: " + getTourLength(),
     "feedback: " + wp.feedback,
     "maxThreads: " + maxThreads,
@@ -1066,13 +1184,13 @@ void frame(color frameColor) {
       final var baseF = base;
       for (int x = base; x < origImg.width; x += 4 + base) {
         final var xf = x;
-        wanderQueue.put(new WanderP(frameColor, (rng) ->  wander2p(xf, baseF, frameColor, rng)));
-        wanderQueue.put(new WanderP(frameColor, (rng) ->  wander2p(xf, origImg.height - baseF - 1, frameColor, rng)));
+        wanderQueue.put(new WanderP(frameColor, (rng) ->  wander2p(xf, baseF, frameColor, 0, rng)));
+        wanderQueue.put(new WanderP(frameColor, (rng) ->  wander2p(xf, origImg.height - baseF - 1, frameColor, 0, rng)));
       }
       for (int y = base; y < origImg.height; y += 4 + base) {
         final var yf = y;
-        wanderQueue.put(new WanderP(frameColor, (rng) ->  wander2p(baseF, yf, frameColor, rng)));
-        wanderQueue.put(new WanderP(frameColor, (rng) ->  wander2p(origImg.width - baseF - 1, yf, frameColor, rng)));
+        wanderQueue.put(new WanderP(frameColor, (rng) ->  wander2p(baseF, yf, frameColor, 0, rng)));
+        wanderQueue.put(new WanderP(frameColor, (rng) ->  wander2p(origImg.width - baseF - 1, yf, frameColor, 0, rng)));
       }
       while (!wanderQueue.isEmpty()) {
         wander(wanderQueue, drawQueue, wp.rng.split());

@@ -282,7 +282,8 @@ public static short[][] gradientMagnitudeAndAngle(float[] arr, int width, int ke
 
   for (int y = 0; y < mat.length; y++) {
     for (int x = 0; x < width; x++) {
-      magnitudes[y * width + x] = (short) (gradientMagnitudeAndAngle[0][y][x]);
+      short m = (short) (barron(gradientMagnitudeAndAngle[0][y][x] / (float) Short.MAX_VALUE, 8, 0) * Short.MAX_VALUE);
+      magnitudes[y * width + x] = m;
       angles[y * width + x] = (short) (gradientMagnitudeAndAngle[1][y][x] * ANGLE_SCALE);
       minAngle = (short) Math.min(minAngle, magnitudes[y * width + x]);
       maxAngle = (short) Math.max(maxAngle, magnitudes[y * width + x]);
@@ -291,7 +292,7 @@ public static short[][] gradientMagnitudeAndAngle(float[] arr, int width, int ke
     }
   }
   println("minAngle: " + minAngle + ", maxAngle: " + maxAngle + ", minRAngle: " + minRAngle + ", maxRAngle: " + maxRAngle);
-
+  
   return new short[][] {magnitudes, angles};
 }
 

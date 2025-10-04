@@ -75,12 +75,12 @@ PixOp[] wander0p(int x, int y, color cNew) {
   return tour;
 }
 
-PixOp[] wander1p(int x, int y, color cNew, SplittableRandom rng) {
+PixOp[] wander1p(int x, int y, color cNew, float magnitudeScale, SplittableRandom rng) {
   float xp = x;
   float yp = y;
 
   List<Integer> bifurcationPoints = new LinkedList<>();
-  int tourLength = getTourLength();
+  int tourLength = (int) (getTourLength() * magnitudeScale);
   PixOp[] tour = new PixOp[tourLength];
   int pIdx = 0;
   float dir = wp.rng.nextFloat(-PI, PI);
@@ -117,7 +117,7 @@ PixOp[] wander1p(int x, int y, color cNew, SplittableRandom rng) {
   return tour;
 }
 
-PixOp[] wander2p(int x, int y, color cNew, SplittableRandom rng) {
+PixOp[] wander2p(int x, int y, color cNew, float magnitudeScale, SplittableRandom rng) {
   int[] xs = {1, 1, 0, -1, -1, -1, 0, 1};
   int[] ys = {0, -1, -1, -1, 0, 1, 1, 1};
   int[] dos = shuffle(xs.length);
@@ -125,7 +125,7 @@ PixOp[] wander2p(int x, int y, color cNew, SplittableRandom rng) {
   int oy = y;
   BitSet visited = new BitSet();
   Set<Integer> visitedSet = new HashSet<>();
-  int tourLength = getTourLength();
+  int tourLength = (int) (getTourLength() * magnitudeScale);
   PixOp[] tour = new PixOp[tourLength];
   int pIdx = 0;
   List<Integer> ps = new ArrayList<>();
@@ -205,7 +205,7 @@ stepLoop:
 
 // Whisks: tourLengthBase: 0.16939592, tourLength: 3458, bifurcationP: 1.2783398E-5, globalOpacity: 1.0, scanIncrement: 0, scale: 7, saveScale: 1, deviation: 0.05, curveBase: 0.0033495426, pathDeviation: 0.0, refinements: 5393, noiseLevel: 0.0
 
-PixOp[] wander3p(int x, int y, color cNew, SplittableRandom rng) {
+PixOp[] wander3p(int x, int y, color cNew, float magnitudeScale, SplittableRandom rng) {
   //  float thetaBase = wp.rng.nextFloat(-PI, PI);
   float thetaBase = (float) wp.rng.nextGaussian(PI / 2, 1);
   float theta = 0;
@@ -213,7 +213,7 @@ PixOp[] wander3p(int x, int y, color cNew, SplittableRandom rng) {
   float curveIncrement = (curveAngle < 0 ? -wp.curveBase : wp.curveBase) / origImg.width;
   float opacity;
   float angleScale = 10000.0 / (origImg.width * origImg.height) * curveIncrement;
-  int tourLength = getTourLength();
+  int tourLength = (int) (getTourLength() * magnitudeScale);
   List<Integer> ps = new LinkedList<>();
   BitSet painted = new BitSet();
   float ox = x;
@@ -294,6 +294,9 @@ void drawSequence(ArrayBlockingQueue<DrawSequence> drawQueue) throws Interrupted
   }
   DrawSequence ds = drawQueue.take();
   PixOp[] ps = ds.ps;
+  if (ps == null || ps.length == 0 || ps[0] == null) {
+    return;
+  }
   float sumY = 0;
   float sumX = 0;
   float pw = 0;
@@ -308,9 +311,17 @@ void drawSequence(ArrayBlockingQueue<DrawSequence> drawQueue) throws Interrupted
     sumX += x * ps[pp].opacity;
     pw += ps[pp].opacity;
   }
-
-  int deltaX = (int) (ps[0].p % w - sumX / pw);
-  int deltaY = (int) (ps[0].p / w - sumY / pw);
+  int deltaX;
+  int deltaY;
+  try {
+    deltaX = (int) (ps[0].p % w - sumX / pw);
+    deltaY = (int) (ps[0].p / w - sumY / pw);
+  }
+  catch(Exception ex) {
+    println("ps: " + ps + ", ps.length: " + ps.length);
+    ex.printStackTrace();
+  }
+  deltaX = deltaY = 0;
 
   Arrays.sort(ps, 0, pp);
 
